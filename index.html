@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+<title>Mur de mémoire — VR</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1020'/%3E%3Crect x='7' y='9' width='18' height='13' rx='2.5' fill='none' stroke='%23f2b544' stroke-width='2.4'/%3E%3C/svg%3E" />
+<style>
+  :root{
+    --bg:#0b1020; --ink:#e8ecf8; --muted:#93a0c0; --line:#1e2a4a;
+    --accent:#f2b544; --ok:#4cc38a; --blue:#5b8def;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;background:var(--bg);color:var(--ink);
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Inter,sans-serif;overflow:hidden}
+  canvas{display:block}
+  #ui{position:fixed;inset:0;pointer-events:none;z-index:10}
+  .panel{pointer-events:auto;position:absolute;background:rgba(12,18,38,.92);
+    border:1px solid var(--line);border-radius:14px;backdrop-filter:blur(8px)}
+  #hud{top:16px;left:16px;padding:14px 16px;max-width:340px}
+  #hud h1{margin:0 0 4px;font-size:15px;letter-spacing:.2px}
+  #hud p{margin:0;font-size:12px;line-height:1.5;color:var(--muted)}
+  #stats{display:flex;gap:14px;margin-top:10px;font-size:12px;color:var(--muted)}
+  #stats b{display:block;font-size:17px;color:var(--ink);font-variant-numeric:tabular-nums}
+  .s-new b{color:var(--blue)!important} .s-due b{color:var(--accent)!important} .s-ok b{color:var(--ok)!important}
+  #tools{top:16px;right:16px;padding:10px;display:flex;gap:8px;flex-wrap:wrap;max-width:270px}
+  button{pointer-events:auto;font:inherit;font-size:12px;padding:8px 12px;border-radius:9px;
+    border:1px solid var(--line);background:#16203c;color:var(--ink);cursor:pointer}
+  button:hover{border-color:#33477e;background:#1b2748}
+  button.primary{background:var(--accent);color:#241a03;border-color:transparent;font-weight:600}
+  #editor{left:16px;right:16px;bottom:16px;max-width:720px;margin:0 auto;padding:16px;display:none}
+  #editor.open{display:block}
+  #editor textarea{width:100%;height:190px;background:#080d1c;color:var(--ink);border:1px solid var(--line);
+    border-radius:10px;padding:12px;font:12px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace;resize:vertical}
+  #editor .row{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:8px}
+  #editor small{color:var(--muted);font-size:11px}
+  #editor .actions{display:flex;gap:8px;margin-top:10px}
+  #hint{bottom:78px;left:50%;transform:translateX(-50%);padding:10px 16px;font-size:12px;color:var(--muted);white-space:nowrap}
+  kbd{background:#16203c;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:11px}
+</style>
+</head>
+<body>
+<div id="ui">
+  <div class="panel" id="hud">
+    <h1>Mur de mémoire</h1>
+    <p id="deckname">48 lois du pouvoir</p>
+    <div id="stats">
+      <div class="s-new"><b id="n-new">0</b>nouvelles</div>
+      <div class="s-due"><b id="n-due">0</b>à revoir</div>
+      <div class="s-ok"><b id="n-ok">0</b>acquises</div>
+    </div>
+  </div>
+
+  <div class="panel" id="tools">
+    <button id="btn-mode">Mode : mur complet</button>
+    <button id="btn-sens">Sens : recto → verso</button>
+    <button id="btn-shuffle">Mélanger</button>
+    <button id="btn-reset">Réinitialiser</button>
+    <button id="btn-edit" class="primary">Éditer le paquet</button>
+  </div>
+
+  <div class="panel" id="editor">
+    <div class="row">
+      <strong style="font-size:13px">Paquet de cartes</strong>
+      <small>une carte par ligne — <code>recto :: verso</code></small>
+    </div>
+    <textarea id="deck-text" spellcheck="false"></textarea>
+    <div class="actions">
+      <button class="primary" id="btn-save">Enregistrer et reconstruire</button>
+      <button id="btn-cancel">Annuler</button>
+    </div>
+  </div>
+
+  <div class="panel" id="hint">
+    Bureau : <kbd>glisser</kbd> regarder · <kbd>clic</kbd> retourner &nbsp;|&nbsp;
+    Quest : <kbd>gâchette</kbd> retourner · <kbd>grip</kbd> déplacer
+  </div>
+</div>
+
+<script type="module">
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.161.0/build/three.module.js';
+import { VRButton } from 'https://cdn.jsdelivr.net/npm/three@0.161.0/examples/jsm/webxr/VRButton.js';
+
+/* ============================ 1. Stockage ============================ */
+const store = (() => {
+  const mem = new Map();
+  let ok = true;
+  try { localStorage.setItem('__t', '1'); localStorage.removeItem('__t'); }
+  catch (e) { ok = false; }
+  return {
+    get(k, fb) {
+      try {
+        const v = ok ? localStorage.getItem(k) : mem.get(k);
+        return v == null ? fb : JSON.parse(v);
+      } catch (e) { return fb; }
+    },
+    set(k, v) {
+      const s = JSON.stringify(v);
+      try { if (ok) localStorage.setItem(k, s); else mem.set(k, s); }
+      catch (e) { mem.set(k, s); }
+    }
+  };
+})();
+
+/* ========================= 2. Paquet par défaut ====================== */
+const DEFAULT_DECK = [
+  "Loi 1 :: Ne jamais surpasser le maître",
+  "Loi 2 :: Ne jamais trop se fier à ses amis ; apprendre à utiliser ses ennemis",
+  "Loi 3 :: Dissimuler ses intentions",
+  "Loi 4 :: Toujours en dire moins que nécessaire",
+  "Loi 5 :: La réputation est le joyau de la vie — la protéger au prix de sa vie",
+  "Loi 6 :: Attirer l'attention à tout prix",
+  "Loi 7 :: Faire travailler les autres pour soi, mais s'en attribuer le mérite",
+  "Loi 8 :: Faire venir les autres à soi, user d'appâts si nécessaire",
+  "Loi 9 :: Gagner par ses actes, jamais par ses arguments",
+  "Loi 10 :: Éviter la contagion du malheur et de l'infortune",
+  "Loi 11 :: Apprendre à rendre les gens dépendants de soi",
+  "Loi 12 :: Désarmer sa victime par une honnêteté et une générosité sélectives",
+  "Loi 13 :: Demander de l'aide en invoquant l'intérêt d'autrui, jamais sa gratitude",
+  "Loi 14 :: Se faire passer pour un ami, agir en espion",
+  "Loi 15 :: Écraser complètement son ennemi",
+  "Loi 16 :: Utiliser l'absence pour accroître respect et honneur",
+  "Loi 17 :: Cultiver un air imprévisible pour maintenir les autres dans l'incertitude",
+  "Loi 18 :: Ne pas s'isoler dans une forteresse — l'isolement est dangereux",
+  "Loi 19 :: Savoir à qui on a affaire : ne pas offenser la mauvaise personne",
+  "Loi 20 :: Ne s'engager envers personne",
+  "Loi 21 :: Jouer les idiots pour attraper les malins",
+  "Loi 22 :: Utiliser la tactique de la reddition : transformer la faiblesse en pouvoir",
+  "Loi 23 :: Concentrer ses forces",
+  "Loi 24 :: Jouer les courtisans parfaits",
+  "Loi 25 :: Se recréer soi-même",
+  "Loi 26 :: Garder les mains propres",
+  "Loi 27 :: Jouer sur le besoin de croire des gens pour se faire des disciples",
+  "Loi 28 :: Se lancer avec audace",
+  "Loi 29 :: Planifier jusqu'au bout",
+  "Loi 30 :: Faire paraître ses exploits sans effort",
+  "Loi 31 :: Contrôler les options : faire choisir les autres parmi les cartes qu'on distribue",
+  "Loi 32 :: Jouer sur les fantasmes des gens",
+  "Loi 33 :: Découvrir le point faible de chacun",
+  "Loi 34 :: Se comporter en roi pour être traité en roi",
+  "Loi 35 :: Maîtriser l'art du timing",
+  "Loi 36 :: Dédaigner ce qu'on ne peut obtenir : l'ignorer est la meilleure vengeance",
+  "Loi 37 :: Créer des spectacles saisissants",
+  "Loi 38 :: Penser comme on veut, mais se comporter comme les autres",
+  "Loi 39 :: Remuer l'eau pour attraper le poisson",
+  "Loi 40 :: Mépriser le repas gratuit",
+  "Loi 41 :: Éviter de marcher dans les pas d'un grand homme",
+  "Loi 42 :: Frapper le berger et le troupeau se dispersera",
+  "Loi 43 :: Travailler les cœurs et les esprits",
+  "Loi 44 :: Désarmer et enrager par l'effet de miroir",
+  "Loi 45 :: Prêcher le besoin de changement, mais ne jamais trop réformer d'un coup",
+  "Loi 46 :: Ne jamais paraître trop parfait",
+  "Loi 47 :: Ne pas dépasser le but visé",
+  "Loi 48 :: Adopter la forme sans forme"
+].join("\n");
+
+/* ============================== 3. État ============================== */
+const DAY = 86400000;
+const INTERVALS = [0, 1, 3, 7, 16, 35];        // Leitner, en jours
+
+let deckText = store.get('mm.deck', DEFAULT_DECK);
+let progress = store.get('mm.progress', {});   // clé -> { box, due }
+let onlyDue  = store.get('mm.onlyDue', false);
+let reversed = store.get('mm.reversed', false);
+let order    = null;                           // ordre mélangé éventuel
+let cards    = [];
+
+const keyOf = (f, b) => (f + '::' + b).slice(0, 140);
+
+function parseDeck(text) {
+  const raw = text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
+    const i = line.indexOf('::');
+    const front = i === -1 ? line : line.slice(0, i).trim();
+    const back  = i === -1 ? ''   : line.slice(i + 2).trim();
+    return { front, back };
+  }).filter(c => c.front);
+
+  return raw.map(c => reversed && c.back
+    ? { front: c.back, back: c.front, id: keyOf(c.front, c.back) }
+    : { front: c.front, back: c.back, id: keyOf(c.front, c.back) });
+}
+
+function stateOf(card) {
+  const p = progress[card.id];
+  if (!p) return 'new';
+  if (p.box >= INTERVALS.length - 1) return 'ok';
+  return p.due <= Date.now() ? 'due' : 'ok';
+}
+
+function grade(card, known) {
+  const p = progress[card.id] || { box: 0, due: 0 };
+  p.box = known ? Math.min(INTERVALS.length - 1, p.box + 1) : 0;
+  p.due = Date.now() + INTERVALS[p.box] * DAY;
+  progress[card.id] = p;
+  store.set('mm.progress', progress);
+}
+
+/* ============================= 4. Scène ============================== */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b1020);
+scene.fog = new THREE.Fog(0x0b1020, 7, 20);
+
+const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 100);
+camera.position.set(0, 1.6, 0);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.xr.enabled = true;
+renderer.xr.setReferenceSpaceType('local-floor');
+document.body.appendChild(renderer.domElement);
+
+const vrBtn = VRButton.createButton(renderer);
+vrBtn.style.zIndex = '20';
+document.body.appendChild(vrBtn);
+
+scene.add(new THREE.HemisphereLight(0x9fc0ff, 0x101830, 1.6));
+const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
+keyLight.position.set(2, 5, 3);
+scene.add(keyLight);
+
+const grid = new THREE.GridHelper(30, 30, 0x2c3d6e, 0x18213d);
+grid.material.transparent = true;
+grid.material.opacity = 0.35;
+scene.add(grid);
+
+const wall = new THREE.Group();
+scene.add(wall);
+
+/* ======================= 5. Textures de carte ======================== */
+const PALETTE = {
+  new: { edge: '#5b8def', tint: '#12203f' },
+  due: { edge: '#f2b544', tint: '#2a2211' },
+  ok:  { edge: '#4cc38a', tint: '#0f2a20' }
+};
+
+function roundRect(ctx, x, y, w, h, r) {
+  ctx.beginPath();
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
+
+function wrapLines(ctx, text, maxW) {
+  const words = String(text).split(/\s+/);
+  const lines = [];
+  let line = '';
+  for (const w of words) {
+    const test = line ? line + ' ' + w : w;
+    if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+    else line = test;
+  }
+  if (line) lines.push(line);
+  return lines;
+}
+
+function makeFace(text, opts) {
+  const W = 768, H = 480;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+
+  ctx.fillStyle = opts.tint;
+  roundRect(ctx, 8, 8, W - 16, H - 16, 34);
+  ctx.fill();
+
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = opts.edge;
+  roundRect(ctx, 8, 8, W - 16, H - 16, 34);
+  ctx.stroke();
+
+  if (opts.label) {
+    ctx.fillStyle = opts.edge;
+    ctx.font = '600 26px ui-sans-serif, system-ui, sans-serif';
+    ctx.textAlign = 'left';
+    ctx.fillText(opts.label.toUpperCase(), 44, 66);
+  }
+
+  let size = opts.big ? 62 : 46;
+  let lines;
+  do {
+    ctx.font = (opts.big ? 700 : 500) + ' ' + size + 'px ui-sans-serif, system-ui, sans-serif';
+    lines = wrapLines(ctx, text, W - 110);
+    size -= 4;
+  } while (lines.length * size * 1.28 > H - 170 && size > 20);
+
+  ctx.fillStyle = '#eef2fb';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  const lh = size * 1.3;
+  const y0 = H / 2 + 14 - ((lines.length - 1) * lh) / 2;
+  lines.forEach((l, i) => ctx.fillText(l, W / 2, y0 + i * lh));
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  return tex;
+}
+
+function makeButtonTex(text, color) {
+  const W = 256, H = 96;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = color;
+  roundRect(ctx, 4, 4, W - 8, H - 8, 22);
+  ctx.fill();
+  ctx.fillStyle = '#08101f';
+  ctx.font = '700 40px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, W / 2, H / 2 + 2);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+const TEX_OK = makeButtonTex('SU', '#4cc38a');
+const TEX_NO = makeButtonTex('À REVOIR', '#e5695f');
+const controllers = [];   // rempli plus bas ; référencé par disposeWall()
+
+/* ========================= 6. Construction =========================== */
+const CARD_W = 0.62, CARD_H = 0.39, CARD_D = 0.014;
+const picking = [];   // meshes cliquables
+const SHARED_TEX = new Set([TEX_OK, TEX_NO]);   // textures réutilisées : ne jamais les détruire
+
+function disposeWall() {
+  // une carte tenue en main est rattachée à la manette : la rendre au mur d'abord
+  controllers.forEach(ctrl => {
+    if (ctrl.userData.held) { wall.attach(ctrl.userData.held); ctrl.userData.held = null; }
+  });
+
+  wall.traverse(o => {
+    if (o.isMesh) {
+      o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(m => {
+        if (m.map && !SHARED_TEX.has(m.map)) m.map.dispose();
+        m.dispose();
+      });
+    }
+  });
+  wall.clear();
+  picking.length = 0;
+  cards = [];
+}
+
+function buildCard(card) {
+  const st = PALETTE[stateOf(card)];
+  const front = makeFace(card.front, { ...st, big: true });
+  const back  = makeFace(card.back || '—', { ...st, label: 'réponse' });
+
+  const side = new THREE.MeshStandardMaterial({ color: 0x141d33, roughness: 0.85 });
+  const mats = [
+    side, side, side, side,
+    new THREE.MeshBasicMaterial({ map: front }),
+    new THREE.MeshBasicMaterial({ map: back })
+  ];
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, CARD_H, CARD_D), mats);
+  mesh.userData.card = card;
+
+  const pivot = new THREE.Group();
+  pivot.add(mesh);
+
+  // boutons d'évaluation (visibles une fois la carte retournée)
+  const mkBtn = (tex, x) => {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.22, 0.084),
+      new THREE.MeshBasicMaterial({ map: tex, transparent: true, side: THREE.DoubleSide })
+    );
+    m.position.set(x, -CARD_H / 2 - 0.075, 0.02);
+    m.visible = false;
+    return m;
+  };
+  const bOk = mkBtn(TEX_OK, -0.125);
+  const bNo = mkBtn(TEX_NO, 0.125);
+  bOk.userData.action = 'ok';
+  bNo.userData.action = 'no';
+  bOk.userData.card = bNo.userData.card = card;
+  pivot.add(bOk, bNo);
+
+  card.mesh = mesh;
+  card.pivot = pivot;
+  card.buttons = [bOk, bNo];
+  card.flipped = false;
+  card.flipTarget = 0;
+  card.flipCur = 0;
+
+  picking.push(mesh, bOk, bNo);
+  return pivot;
+}
+
+// Disposition en arc cylindrique autour de l'utilisateur : max 3 rangées,
+// hauteur confortable (0.95 m – 2.05 m), on tourne la tête plutôt que de lever les yeux.
+function layout() {
+  const n = cards.length;
+  if (!n) return;
+
+  const MAX_ROWS = 3, PER_ROW_TARGET = 16;
+  const rows = Math.min(MAX_ROWS, Math.max(1, Math.ceil(n / PER_ROW_TARGET)));
+  const perRow = Math.ceil(n / rows);
+
+  const R = 2.6;
+  const rowH = CARD_H + 0.17;
+  const yCenter = 1.5;
+  const step = Math.min(
+    THREE.MathUtils.degToRad(300) / Math.max(perRow, 1),
+    (CARD_W + 0.13) / R                       // pas d'écart trop grand quand il y a peu de cartes
+  );
+
+  cards.forEach((card, i) => {
+    const r = Math.floor(i / perRow);
+    const c = i % perRow;
+    const inRow = Math.min(perRow, n - r * perRow);
+    const theta = (c - (inRow - 1) / 2) * step;
+    const y = yCenter + ((rows - 1) / 2 - r) * rowH;
+
+    const p = card.pivot;
+    p.position.set(Math.sin(theta) * R, y, -Math.cos(theta) * R);
+    p.lookAt(0, y, 0);
+    p.userData.home = p.position.clone();
+    p.userData.homeQ = p.quaternion.clone();
+  });
+}
+
+function visibleDeck() {
+  let list = parseDeck(deckText);
+  if (onlyDue) {
+    const due = list.filter(c => stateOf(c) !== 'ok');
+    if (due.length) list = due;
+  }
+  if (order) {
+    const rank = new Map(order.map((id, i) => [id, i]));
+    list = list.slice().sort((a, b) =>
+      (rank.has(a.id) ? rank.get(a.id) : 1e9) - (rank.has(b.id) ? rank.get(b.id) : 1e9));
+  }
+  return list;
+}
+
+function rebuild() {
+  disposeWall();
+  cards = visibleDeck();
+  cards.forEach(c => wall.add(buildCard(c)));
+  layout();
+  refreshStats();
+}
+
+function refreshStats() {
+  const all = parseDeck(deckText);
+  let n = 0, d = 0, o = 0;
+  all.forEach(c => {
+    const s = stateOf(c);
+    if (s === 'new') n++; else if (s === 'due') d++; else o++;
+  });
+  document.getElementById('n-new').textContent = n;
+  document.getElementById('n-due').textContent = d;
+  document.getElementById('n-ok').textContent  = o;
+  document.getElementById('deckname').textContent =
+    all.length + ' cartes · ' + cards.length + ' affichées';
+}
+
+/* ===================== 7. Interaction commune ======================== */
+function flip(card) {
+  card.flipped = !card.flipped;
+  card.flipTarget = card.flipped ? Math.PI : 0;
+  card.buttons.forEach(b => { b.visible = card.flipped; });
+}
+
+function activate(obj) {
+  if (!obj) return;
+  if (obj.userData.action) {
+    const card = obj.userData.card;
+    grade(card, obj.userData.action === 'ok');
+    flip(card);
+    const st = PALETTE[stateOf(card)];
+    card.mesh.material[4].map.dispose();
+    card.mesh.material[5].map.dispose();
+    card.mesh.material[4].map = makeFace(card.front, { ...st, big: true });
+    card.mesh.material[5].map = makeFace(card.back || '—', { ...st, label: 'réponse' });
+    card.mesh.material[4].needsUpdate = true;
+    card.mesh.material[5].needsUpdate = true;
+    refreshStats();
+    return;
+  }
+  if (obj.userData.card) flip(obj.userData.card);
+}
+
+const raycaster = new THREE.Raycaster();
+
+function hit(origin, dir) {
+  raycaster.set(origin, dir);
+  const list = picking.filter(m => m.visible !== false);
+  const inter = raycaster.intersectObjects(list, false);
+  return inter.length ? inter[0].object : null;
+}
+
+/* ======================== 8. Manettes Quest ========================== */
+const tmpM = new THREE.Matrix4();
+
+for (let i = 0; i < 2; i++) {
+  const ctrl = renderer.xr.getController(i);
+  const line = new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0, 0), new THREE.Vector3(0, 0, -1)]),
+    new THREE.LineBasicMaterial({ color: 0x8fb4ff, transparent: true, opacity: 0.8 })
+  );
+  line.scale.z = 3;
+  ctrl.add(line);
+
+  const tip = new THREE.Mesh(
+    new THREE.SphereGeometry(0.012, 12, 12),
+    new THREE.MeshBasicMaterial({ color: 0xf2b544 })
+  );
+  tip.position.z = -0.03;
+  ctrl.add(tip);
+
+  ctrl.userData.held = null;
+
+  ctrl.addEventListener('selectstart', () => {
+    const o = rayFrom(ctrl);
+    activate(o);
+  });
+
+  ctrl.addEventListener('squeezestart', () => {
+    const o = rayFrom(ctrl);
+    if (!o || !o.userData.card || o.userData.action) return;
+    const pivot = o.userData.card.pivot;
+    ctrl.attach(pivot);
+    ctrl.userData.held = pivot;
+  });
+
+  ctrl.addEventListener('squeezeend', () => {
+    if (ctrl.userData.held) { wall.attach(ctrl.userData.held); ctrl.userData.held = null; }
+  });
+
+  scene.add(ctrl);
+  controllers.push(ctrl);
+}
+
+function rayFrom(ctrl) {
+  tmpM.identity().extractRotation(ctrl.matrixWorld);
+  const origin = new THREE.Vector3().setFromMatrixPosition(ctrl.matrixWorld);
+  const dir = new THREE.Vector3(0, 0, -1).applyMatrix4(tmpM).normalize();
+  return hit(origin, dir);
+}
+
+/* ==================== 9. Contrôles bureau (test) ===================== */
+let yaw = 0, pitch = 0, dragging = false, moved = false, lx = 0, ly = 0;
+const el = renderer.domElement;
+
+el.addEventListener('pointerdown', e => { dragging = true; moved = false; lx = e.clientX; ly = e.clientY; });
+el.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lx, dy = e.clientY - ly;
+  if (Math.abs(dx) + Math.abs(dy) > 4) moved = true;
+  yaw -= dx * 0.004;
+  pitch = THREE.MathUtils.clamp(pitch - dy * 0.004, -1.1, 1.1);
+  lx = e.clientX; ly = e.clientY;
+});
+addEventListener('pointerup', e => {
+  if (dragging && !moved && !renderer.xr.isPresenting) {
+    const ndc = new THREE.Vector2(
+      (e.clientX / innerWidth) * 2 - 1,
+      -(e.clientY / innerHeight) * 2 + 1
+    );
+    raycaster.setFromCamera(ndc, camera);
+    const inter = raycaster.intersectObjects(picking.filter(m => m.visible !== false), false);
+    if (inter.length) activate(inter[0].object);
+  }
+  dragging = false;
+});
+el.addEventListener('wheel', e => {
+  wall.position.z = THREE.MathUtils.clamp(wall.position.z + e.deltaY * 0.001, -1.2, 1.2);
+}, { passive: true });
+
+/* ============================ 10. Boucle ============================= */
+renderer.setAnimationLoop(() => {
+  cards.forEach(c => {
+    if (Math.abs(c.flipCur - c.flipTarget) > 0.001) {
+      c.flipCur += (c.flipTarget - c.flipCur) * 0.18;
+      c.mesh.rotation.y = c.flipCur;   // les boutons ne pivotent pas : ils restent face à l'utilisateur
+    }
+  });
+
+  if (!renderer.xr.isPresenting) {
+    camera.position.set(0, 1.6, 0);
+    camera.rotation.set(pitch, yaw, 0, 'YXZ');
+  }
+  renderer.render(scene, camera);
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+/* ============================= 11. UI ================================ */
+const $ = id => document.getElementById(id);
+
+$('btn-mode').onclick = () => {
+  onlyDue = !onlyDue;
+  store.set('mm.onlyDue', onlyDue);
+  $('btn-mode').textContent = onlyDue ? 'Mode : à revoir' : 'Mode : mur complet';
+  rebuild();
+};
+
+$('btn-sens').onclick = () => {
+  reversed = !reversed;
+  store.set('mm.reversed', reversed);
+  $('btn-sens').textContent = reversed ? 'Sens : verso → recto' : 'Sens : recto → verso';
+  rebuild();
+};
+
+$('btn-shuffle').onclick = () => {
+  const ids = parseDeck(deckText).map(c => c.id);
+  for (let i = ids.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+  }
+  order = ids;
+  rebuild();
+};
+
+$('btn-reset').onclick = () => {
+  progress = {};
+  store.set('mm.progress', progress);
+  order = null;
+  rebuild();
+};
+
+$('btn-edit').onclick = () => {
+  $('deck-text').value = deckText;
+  $('editor').classList.add('open');
+};
+$('btn-cancel').onclick = () => $('editor').classList.remove('open');
+$('btn-save').onclick = () => {
+  deckText = $('deck-text').value;
+  store.set('mm.deck', deckText);
+  order = null;
+  $('editor').classList.remove('open');
+  rebuild();
+};
+
+$('btn-mode').textContent = onlyDue ? 'Mode : à revoir' : 'Mode : mur complet';
+$('btn-sens').textContent = reversed ? 'Sens : verso → recto' : 'Sens : recto → verso';
+
+rebuild();
+window.__mm = { cards: () => cards, rebuild, stateOf, activate, flip, parseDeck: () => parseDeck(deckText) };
+</script>
+</body>
+</html>
