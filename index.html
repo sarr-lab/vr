@@ -1373,14 +1373,38 @@ function buildChapter() {
   questGrp.add(panoSphere);
   if (ch.pano) {
     loadImg(ch.pano).then(im => {
-      if (im && panoSphere) {
-        const tex = new THREE.Texture(im);
-        tex.colorSpace = THREE.SRGBColorSpace;
-        tex.needsUpdate = true;
-        panoSphere.material.map = tex;
-        panoSphere.material.color.set(0xffffff);
-        panoSphere.material.needsUpdate = true;
-      }
+      if (!im || !panoSphere) return;
+      // L'image générée n'est pas une vraie équirectangulaire : on la projette
+      // sur l'avant et son miroir sur l'arrière (aucune couture), et on fond
+      // les pôles dans la pénombre pour masquer le pincement.
+      const W = 4096, H = 1024;
+      const cv = document.createElement('canvas');
+      cv.width = W; cv.height = H;
+      const ctx = cv.getContext('2d');
+      try {
+        ctx.drawImage(im, 0, 0, W / 2, H);
+        ctx.save();
+        ctx.translate(W, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(im, 0, 0, W / 2, H);
+        ctx.restore();
+      } catch (e) {}
+      let g = ctx.createLinearGradient(0, 0, 0, 150);
+      g.addColorStop(0, 'rgba(9,13,26,1)');
+      g.addColorStop(1, 'rgba(9,13,26,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, 0, W, 150);
+      g = ctx.createLinearGradient(0, H - 220, 0, H);
+      g.addColorStop(0, 'rgba(9,13,26,0)');
+      g.addColorStop(1, 'rgba(9,13,26,1)');
+      ctx.fillStyle = g;
+      ctx.fillRect(0, H - 220, W, 220);
+
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      panoSphere.material.map = tex;
+      panoSphere.material.color.set(0xffffff);
+      panoSphere.material.needsUpdate = true;
     });
   }
 
