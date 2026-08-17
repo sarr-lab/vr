@@ -56,6 +56,8 @@
     <button id="btn-sens">Sens : recto → verso</button>
     <button id="btn-shuffle">Mélanger</button>
     <button id="btn-reset">Réinitialiser</button>
+    <button id="btn-focus">Révision guidée</button>
+    <button id="btn-arc">Ranger en arc</button>
     <button id="btn-edit" class="primary">Éditer le paquet</button>
   </div>
 
@@ -163,7 +165,9 @@ let progress = store.get('mm.progress', {});   // clé -> { box, due }
 let onlyDue  = store.get('mm.onlyDue', false);
 let reversed = store.get('mm.reversed', false);
 let order    = null;                           // ordre mélangé éventuel
+let placed   = store.get('mm.placed', {});     // palais de mémoire : id -> { p, q }
 let cards    = [];
+let focusMode = false, queue = [], qi = 0;     // mode révision guidée
 
 const keyOf = (f, b) => (f + '::' + b).slice(0, 140);
 
@@ -423,6 +427,13 @@ function layout() {
     p.lookAt(0, y, 0);
     p.userData.home = p.position.clone();
     p.userData.homeQ = p.quaternion.clone();
+
+    // palais de mémoire : si l'utilisateur a posé cette carte quelque part, on l'y remet
+    const sv = placed[card.id];
+    if (sv && sv.p && sv.q) {
+      p.position.fromArray(sv.p);
+      p.quaternion.fromArray(sv.q);
+    }
   });
 }
 
@@ -441,6 +452,7 @@ function visibleDeck() {
 }
 
 function rebuild() {
+  if (focusMode) { focusMode = false; queue = []; updFocusUI(); }
   disposeWall();
   cards = visibleDeck();
   cards.forEach(c => wall.add(buildCard(c)));
@@ -462,6 +474,67 @@ function refreshStats() {
     all.length + ' cartes · ' + cards.length + ' affichées';
 }
 
+/* ================== 6b. Palais de mémoire + focus ==================== */
+function savePlaced(pivot) {
+  const mesh = pivot.children.find(ch => ch.userData && ch.userData.card);
+  if (!mesh) return;
+  const card = mesh.userData.card;
+  placed[card.id] = { p: pivot.position.toArray(), q: pivot.quaternion.toArray() };
+  store.set('mm.placed', placed);
+}
+
+function releaseHeld(ctrl) {
+  if (!ctrl.userData.held) return;
+  wall.attach(ctrl.userData.held);
+  savePlaced(ctrl.userData.held);
+  ctrl.userData.held = null;
+}
+
+function setCardVisible(c, v) {
+  c.pivot.visible = v;
+  c.mesh.visible = v;
+  c.buttons.forEach(b => { b.visible = v && c.flipped; });
+}
+
+function orderKey(c) { const s = stateOf(c); return s === 'due' ? 0 : s === 'new' ? 1 : 2; }
+
+function enterFocus() {
+  focusMode = true;
+  queue = cards.slice().sort((a, b) => orderKey(a) - orderKey(b));
+  qi = 0;
+  showFocus();
+  updFocusUI();
+}
+
+function showFocus() {
+  cards.forEach(c => setCardVisible(c, false));
+  const c = queue[qi];
+  if (!c) { exitFocus(); return; }
+  if (c.flipped) { c.flipped = false; c.flipTarget = 0; }
+  setCardVisible(c, true);
+  c.pivot.position.set(0, 1.55, -1.15);
+  c.pivot.lookAt(0, 1.55, 0);
+}
+
+function focusNext() {
+  qi++;
+  if (qi >= queue.length) exitFocus();
+  else showFocus();
+}
+
+function exitFocus() {
+  focusMode = false;
+  cards.forEach(c => setCardVisible(c, true));
+  layout();
+  updFocusUI();
+}
+
+function updFocusUI() {
+  const b = document.getElementById('btn-focus');
+  if (b) b.textContent = focusMode ? 'Quitter la révision' : 'Révision guidée';
+  if (typeof skipBtn !== 'undefined') skipBtn.visible = focusMode;
+}
+
 /* ===================== 7. Interaction commune ======================== */
 function flip(card) {
   card.flipped = !card.flipped;
@@ -471,6 +544,16 @@ function flip(card) {
 
 function activate(obj) {
   if (!obj) return;
+  if (obj.userData.ui) {
+    if (obj.userData.ui === 'focus') { focusMode ? exitFocus() : enterFocus(); }
+    else if (obj.userData.ui === 'arc') {
+      placed = {};
+      store.set('mm.placed', placed);
+      if (!focusMode) layout();
+    }
+    else if (obj.userData.ui === 'skip' && focusMode) focusNext();
+    return;
+  }
   if (obj.userData.action) {
     const card = obj.userData.card;
     grade(card, obj.userData.action === 'ok');
@@ -483,6 +566,7 @@ function activate(obj) {
     card.mesh.material[4].needsUpdate = true;
     card.mesh.material[5].needsUpdate = true;
     refreshStats();
+    if (focusMode) focusNext();
     return;
   }
   if (obj.userData.card) flip(obj.userData.card);
@@ -490,10 +574,35 @@ function activate(obj) {
 
 const raycaster = new THREE.Raycaster();
 
+/* Panneau de commandes 3D, visible dans le casque */
+const uiButtons = [];
+const panel = new THREE.Group();
+function panelBtn(txt, color, action, x) {
+  const m = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.27, 0.10),
+    new THREE.MeshBasicMaterial({ map: makeButtonTex(txt, color), transparent: true, side: THREE.DoubleSide })
+  );
+  m.position.x = x;
+  m.userData.ui = action;
+  uiButtons.push(m);
+  panel.add(m);
+  return m;
+}
+panelBtn('RÉVISION', '#5b8def', 'focus', -0.31);
+panelBtn('RANGER', '#93a0c0', 'arc', 0);
+const skipBtn = panelBtn('PASSER', '#f2b544', 'skip', 0.31);
+skipBtn.visible = false;
+panel.position.set(0, 1.02, -1.0);
+panel.rotation.x = -0.55;
+scene.add(panel);
+
+function pickables() {
+  return picking.concat(uiButtons).filter(m => m.visible !== false);
+}
+
 function hit(origin, dir) {
   raycaster.set(origin, dir);
-  const list = picking.filter(m => m.visible !== false);
-  const inter = raycaster.intersectObjects(list, false);
+  const inter = raycaster.intersectObjects(pickables(), false);
   return inter.length ? inter[0].object : null;
 }
 
@@ -518,22 +627,46 @@ for (let i = 0; i < 2; i++) {
 
   ctrl.userData.held = null;
 
+  // détecte si la source d'entrée est une main (suivi des mains) ou une manette
+  ctrl.addEventListener('connected', e => {
+    ctrl.userData.isHand = !!(e.data && e.data.hand);
+  });
+
   ctrl.addEventListener('selectstart', () => {
     const o = rayFrom(ctrl);
-    activate(o);
+    if (ctrl.userData.isHand) {
+      // mains : pincement court = activer, pincement maintenu = saisir
+      ctrl.userData.pending = o;
+      clearTimeout(ctrl.userData.timer);
+      ctrl.userData.timer = setTimeout(() => {
+        const t = ctrl.userData.pending;
+        if (t && t.userData.card && !t.userData.action && !t.userData.ui) {
+          ctrl.attach(t.userData.card.pivot);
+          ctrl.userData.held = t.userData.card.pivot;
+          ctrl.userData.pending = null;
+        }
+      }, 350);
+    } else {
+      activate(o);
+    }
+  });
+
+  ctrl.addEventListener('selectend', () => {
+    if (!ctrl.userData.isHand) return;
+    clearTimeout(ctrl.userData.timer);
+    if (ctrl.userData.held) releaseHeld(ctrl);
+    else if (ctrl.userData.pending) { activate(ctrl.userData.pending); ctrl.userData.pending = null; }
   });
 
   ctrl.addEventListener('squeezestart', () => {
     const o = rayFrom(ctrl);
-    if (!o || !o.userData.card || o.userData.action) return;
+    if (!o || !o.userData.card || o.userData.action || o.userData.ui) return;
     const pivot = o.userData.card.pivot;
     ctrl.attach(pivot);
     ctrl.userData.held = pivot;
   });
 
-  ctrl.addEventListener('squeezeend', () => {
-    if (ctrl.userData.held) { wall.attach(ctrl.userData.held); ctrl.userData.held = null; }
-  });
+  ctrl.addEventListener('squeezeend', () => releaseHeld(ctrl));
 
   scene.add(ctrl);
   controllers.push(ctrl);
@@ -566,7 +699,7 @@ addEventListener('pointerup', e => {
       -(e.clientY / innerHeight) * 2 + 1
     );
     raycaster.setFromCamera(ndc, camera);
-    const inter = raycaster.intersectObjects(picking.filter(m => m.visible !== false), false);
+    const inter = raycaster.intersectObjects(pickables(), false);
     if (inter.length) activate(inter[0].object);
   }
   dragging = false;
@@ -631,6 +764,13 @@ $('btn-reset').onclick = () => {
   rebuild();
 };
 
+$('btn-focus').onclick = () => { focusMode ? exitFocus() : enterFocus(); };
+$('btn-arc').onclick = () => {
+  placed = {};
+  store.set('mm.placed', placed);
+  if (!focusMode) layout();
+};
+
 $('btn-edit').onclick = () => {
   $('deck-text').value = deckText;
   $('editor').classList.add('open');
@@ -648,7 +788,14 @@ $('btn-mode').textContent = onlyDue ? 'Mode : à revoir' : 'Mode : mur complet';
 $('btn-sens').textContent = reversed ? 'Sens : verso → recto' : 'Sens : recto → verso';
 
 rebuild();
-window.__mm = { cards: () => cards, rebuild, stateOf, activate, flip, parseDeck: () => parseDeck(deckText) };
+window.__mm = {
+  cards: () => cards, rebuild, stateOf, activate, flip,
+  parseDeck: () => parseDeck(deckText),
+  enterFocus, exitFocus, savePlaced,
+  focus: () => ({ focusMode, qi, queueLen: queue.length }),
+  placed: () => placed,
+  panel: { skipBtn }
+};
 </script>
 </body>
 </html>
