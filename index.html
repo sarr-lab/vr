@@ -5,6 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
 <title>Mur de mémoire — VR</title>
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230b1020'/%3E%3Crect x='7' y='9' width='18' height='13' rx='2.5' fill='none' stroke='%23f2b544' stroke-width='2.4'/%3E%3C/svg%3E" />
+<link rel="manifest" href="./manifest.webmanifest" />
+<meta name="theme-color" content="#0b1020" />
 <style>
   :root{
     --bg:#0b1020; --ink:#e8ecf8; --muted:#93a0c0; --line:#1e2a4a;
@@ -23,7 +25,18 @@
   #stats{display:flex;gap:14px;margin-top:10px;font-size:12px;color:var(--muted)}
   #stats b{display:block;font-size:17px;color:var(--ink);font-variant-numeric:tabular-nums}
   .s-new b{color:var(--blue)!important} .s-due b{color:var(--accent)!important} .s-ok b{color:var(--ok)!important}
-  #tools{top:16px;right:16px;padding:10px;display:flex;gap:8px;flex-wrap:wrap;max-width:270px}
+  #tools{top:16px;right:16px;padding:10px;display:flex;gap:8px;flex-wrap:wrap;max-width:300px;max-height:80vh;overflow:auto}
+  #statsbox{top:50%;left:50%;transform:translate(-50%,-50%);width:min(560px,92vw);padding:18px;display:none;max-height:80vh;overflow:auto}
+  #statsbox.open{display:block}
+  #statsbox h2{margin:0 0 12px;font-size:15px}
+  #statsbox .kpis{display:flex;gap:18px;margin-bottom:14px}
+  #statsbox .kpis b{display:block;font-size:20px;color:var(--accent)}
+  #statsbox .kpis span{font-size:11px;color:var(--muted)}
+  .days{display:flex;gap:3px;align-items:flex-end;height:56px;margin:6px 0 14px}
+  .days i{display:block;width:16px;background:#2c4a8a;border-radius:3px 3px 0 0;min-height:2px}
+  .days i.today{background:var(--accent)}
+  #statsbox ol{margin:6px 0 0;padding-left:20px;font-size:12px;line-height:1.7;color:var(--muted)}
+  #statsbox ol b{color:var(--ink);font-weight:500}
   button{pointer-events:auto;font:inherit;font-size:12px;padding:8px 12px;border-radius:9px;
     border:1px solid var(--line);background:#16203c;color:var(--ink);cursor:pointer}
   button:hover{border-color:#33477e;background:#1b2748}
@@ -74,9 +87,28 @@
     <button id="btn-focus">Révision guidée</button>
     <button id="btn-arc">Ranger en arc</button>
     <button id="btn-edit" class="primary">Éditer le paquet</button>
+    <button id="btn-decor">Décor : nuit</button>
+    <button id="btn-stats">Stats</button>
+    <select id="text-select" title="Texte à mémoriser"></select>
+    <button id="btn-text">Mémoriser le texte</button>
     <input id="sync-code" placeholder="code de sync" title="Le même code sur chaque appareil relie les progressions" />
     <button id="btn-push">Envoyer</button>
     <button id="btn-pull">Recevoir</button>
+    <button id="btn-duo">Duo : non</button>
+  </div>
+
+  <div class="panel" id="statsbox">
+    <h2>Ta progression</h2>
+    <div class="kpis">
+      <div><b id="st-total">0</b><span>révisions au total</span></div>
+      <div><b id="st-streak">0</b><span>jours d'affilée</span></div>
+      <div><b id="st-rate">–</b><span>taux de réussite</span></div>
+    </div>
+    <div style="font-size:12px;color:var(--muted)">14 derniers jours</div>
+    <div class="days" id="st-days"></div>
+    <div style="font-size:12px;color:var(--muted)">Cartes les plus ratées</div>
+    <ol id="st-fails"></ol>
+    <div class="actions" style="margin-top:14px"><button id="st-close">Fermer</button></div>
   </div>
 
   <div class="panel" id="editor">
@@ -90,6 +122,26 @@
       <button class="primary" id="btn-save">Enregistrer et reconstruire</button>
       <button id="btn-cancel">Annuler</button>
       <button id="btn-deldeck" class="danger">Supprimer ce paquet</button>
+    </div>
+    <hr class="sep" />
+    <div class="row">
+      <strong style="font-size:13px">Texte long à mémoriser</strong>
+      <small>il s'effacera par niveaux pendant que tu récites</small>
+    </div>
+    <input id="text-name" placeholder="Nom du texte" spellcheck="false" style="width:100%;margin-bottom:8px" />
+    <textarea id="text-content" spellcheck="false" style="height:110px" placeholder="Colle ici le texte à apprendre par cœur (poème, versets, passage…)"></textarea>
+    <div class="actions">
+      <button id="btn-savetext">Enregistrer le texte</button>
+      <button id="btn-deltext" class="danger">Supprimer</button>
+    </div>
+    <hr class="sep" />
+    <div class="row">
+      <strong style="font-size:13px">Importer des cartes (CSV / TSV)</strong>
+      <small>export Anki : Fichier → Exporter → Notes en texte</small>
+    </div>
+    <div class="actions">
+      <input type="file" id="csv-file" accept=".csv,.tsv,.txt" />
+      <span id="csv-status" style="font-size:11px;color:var(--muted);align-self:center"></span>
     </div>
     <hr class="sep" />
     <div class="row">
@@ -229,6 +281,32 @@ if (!decks) {
 let curDeck = store.get('mm.curDeck', '48 lois du pouvoir');
 if (!decks[curDeck]) curDeck = Object.keys(decks)[0];
 
+// Textes longs (mémorisation par effacement progressif)
+const SAMPLE_TEXT_NAME = 'Le Laboureur et ses Enfants (La Fontaine)';
+const SAMPLE_TEXT =
+  "Travaillez, prenez de la peine : C'est le fonds qui manque le moins. " +
+  "Un riche Laboureur, sentant sa mort prochaine, Fit venir ses enfants, leur parla sans témoins. " +
+  "« Gardez-vous, leur dit-il, de vendre l'héritage Que nous ont laissé nos parents : " +
+  "Un trésor est caché dedans. Je ne sais pas l'endroit ; mais un peu de courage " +
+  "Vous le fera trouver : vous en viendrez à bout. Remuez votre champ dès qu'on aura fait l'oût : " +
+  "Creusez, fouillez, bêchez ; ne laissez nulle place Où la main ne passe et repasse. » " +
+  "Le père mort, les fils vous retournent le champ, Deçà, delà, partout ; si bien qu'au bout de l'an " +
+  "Il en rapporta davantage. D'argent, point de caché. Mais le père fut sage " +
+  "De leur montrer, avant sa mort, Que le travail est un trésor.";
+
+let texts = store.get('mm.texts', null);
+if (!texts) { texts = {}; texts[SAMPLE_TEXT_NAME] = SAMPLE_TEXT; store.set('mm.texts', texts); }
+let curText = store.get('mm.curText', SAMPLE_TEXT_NAME);
+if (!texts[curText]) curText = Object.keys(texts)[0];
+let textMode = false, textLevel = 0, textPage = 0;
+const LEVEL_NAMES = ['complet', 'mots masqués', 'initiales', 'de mémoire'];
+
+// Journal de progression (stats)
+let flog  = store.get('mm.flog', {});    // 'AAAA-MM-JJ' -> { n, ok }
+let fails = store.get('mm.fails', {});   // id de carte -> nb d'échecs
+
+let decor = store.get('mm.decor', 'nuit');   // nuit | étoiles | désert
+
 let deckText   = decks[curDeck];
 let progress   = store.get('mm.progress', {});   // clé -> { box, due }
 let onlyDue    = store.get('mm.onlyDue', false);
@@ -252,7 +330,7 @@ const syncHeaders = {
 async function syncPush(code) {
   const body = JSON.stringify({
     code,
-    data: { decks, progress, placed, curDeck },
+    data: { decks, progress, placed, curDeck, texts, flog, fails },
     updated_at: new Date().toISOString()
   });
   const r = await fetch(SYNC_URL + '?on_conflict=code', {
@@ -272,8 +350,67 @@ async function syncPull(code) {
   if (d.decks)    { decks = d.decks;       store.set('mm.decks', decks); }
   if (d.progress) { progress = d.progress; store.set('mm.progress', progress); }
   if (d.placed)   { placed = d.placed;     store.set('mm.placed', placed); }
+  if (d.texts)    { texts = d.texts;       store.set('mm.texts', texts); if (!texts[curText]) curText = Object.keys(texts)[0]; }
+  if (d.flog)     { flog = d.flog;         store.set('mm.flog', flog); }
+  if (d.fails)    { fails = d.fails;       store.set('mm.fails', fails); }
   if (d.curDeck && decks[d.curDeck]) { curDeck = d.curDeck; store.set('mm.curDeck', curDeck); }
   deckText = decks[curDeck];
+}
+
+/* --- Duo : révision à deux en temps réel --- */
+let duo = false, duoCh = null, duoReady = false;
+
+function duoSend(type, d) {
+  if (duo && duoCh && duoReady) {
+    try { duoCh.send({ type: 'broadcast', event: 'act', payload: { type, ...d } }); } catch (e) {}
+  }
+}
+
+function applyRemote(p) {
+  if (!p || !p.type) return;
+  const card = cards.find(c => c.id === p.id);
+  if (!card) return;
+  if (p.type === 'flip') {
+    card.flipped = !!p.open;
+    card.flipTarget = card.flipped ? Math.PI : 0;
+    card.buttons.forEach(b => { b.visible = card.flipped && card.pivot.visible; });
+  } else if (p.type === 'grade') {
+    grade(card, !!p.known);
+    card.flipped = false; card.flipTarget = 0;
+    card.buttons.forEach(b => { b.visible = false; });
+    refreshStats();
+  } else if (p.type === 'move' && p.p && p.q) {
+    card.pivot.position.fromArray(p.p);
+    card.pivot.quaternion.fromArray(p.q);
+  }
+}
+
+async function toggleDuo() {
+  const btn = document.getElementById('btn-duo');
+  if (duo) {
+    duo = false; duoReady = false;
+    try { if (duoCh) duoCh.unsubscribe(); } catch (e) {}
+    duoCh = null;
+    btn.textContent = 'Duo : non';
+    return;
+  }
+  const code = document.getElementById('sync-code').value.trim();
+  if (!code) { btn.textContent = 'Code de sync ?'; setTimeout(() => { btn.textContent = 'Duo : non'; }, 2200); return; }
+  btn.textContent = 'Duo : connexion…';
+  try {
+    const { createClient } = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm');
+    const sb = createClient('https://xfcpseixozmikaxfkxxv.supabase.co', SYNC_KEY);
+    duoCh = sb.channel('mm-' + code, { config: { broadcast: { self: false } } });
+    duoCh.on('broadcast', { event: 'act' }, msg => applyRemote(msg.payload));
+    duoCh.subscribe(st => {
+      duoReady = (st === 'SUBSCRIBED');
+      if (duoReady) { duo = true; btn.textContent = 'Duo : oui'; }
+      else if (st === 'CHANNEL_ERROR' || st === 'TIMED_OUT') { duo = false; btn.textContent = 'Duo : échec'; }
+    });
+  } catch (e) {
+    btn.textContent = 'Duo : échec';
+    setTimeout(() => { btn.textContent = 'Duo : non'; }, 2500);
+  }
 }
 
 /* --- Voix (synthèse vocale) --- */
@@ -316,6 +453,15 @@ function grade(card, known) {
   p.due = Date.now() + INTERVALS[p.box] * DAY;
   progress[card.id] = p;
   store.set('mm.progress', progress);
+
+  // journal pour les stats
+  const dk = new Date().toISOString().slice(0, 10);
+  flog[dk] = flog[dk] || { n: 0, ok: 0 };
+  flog[dk].n++;
+  if (known) flog[dk].ok++;
+  else fails[card.id] = (fails[card.id] || 0) + 1;
+  store.set('mm.flog', flog);
+  store.set('mm.fails', fails);
 }
 
 /* ============================= 4. Scène ============================== */
@@ -361,19 +507,19 @@ mrBtn.onclick = async () => {
   } catch (e) { /* refusé ou indisponible */ }
 };
 
-let savedBg = null, savedFog = null;
+let wasAR = false;
 renderer.xr.addEventListener('sessionstart', () => {
   const s = renderer.xr.getSession();
-  const isAR = s && s.environmentBlendMode && s.environmentBlendMode !== 'opaque';
-  if (isAR) {
-    savedBg = scene.background; savedFog = scene.fog;
+  wasAR = !!(s && s.environmentBlendMode && s.environmentBlendMode !== 'opaque');
+  if (wasAR) {
     scene.background = null;      // laisse voir la pièce réelle
     scene.fog = null;
     grid.visible = false;
+    stars.visible = false;
   }
 });
 renderer.xr.addEventListener('sessionend', () => {
-  if (savedBg) { scene.background = savedBg; scene.fog = savedFog; grid.visible = true; savedBg = null; }
+  if (wasAR) { grid.visible = true; applyDecor(); wasAR = false; }
 });
 
 scene.add(new THREE.HemisphereLight(0x9fc0ff, 0x101830, 1.6));
@@ -624,6 +770,7 @@ function visibleDeck() {
 
 function rebuild() {
   if (focusMode) { focusMode = false; queue = []; updFocusUI(); }
+  if (textMode) exitTextMode();
   disposeWall();
   cards = visibleDeck();
   cards.forEach(c => wall.add(buildCard(c)));
@@ -656,8 +803,11 @@ function savePlaced(pivot) {
 
 function releaseHeld(ctrl) {
   if (!ctrl.userData.held) return;
-  wall.attach(ctrl.userData.held);
-  savePlaced(ctrl.userData.held);
+  const pivot = ctrl.userData.held;
+  wall.attach(pivot);
+  savePlaced(pivot);
+  const mesh = pivot.children.find(ch => ch.userData && ch.userData.card);
+  if (mesh) duoSend('move', { id: mesh.userData.card.id, p: pivot.position.toArray(), q: pivot.quaternion.toArray() });
   ctrl.userData.held = null;
 }
 
@@ -713,23 +863,30 @@ function flip(card) {
   card.flipTarget = card.flipped ? Math.PI : 0;
   card.buttons.forEach(b => { b.visible = card.flipped; });
   if (card.flipped) speak(card.back || card.front);
+  duoSend('flip', { id: card.id, open: card.flipped });
 }
 
 function activate(obj) {
   if (!obj) return;
   if (obj.userData.ui) {
-    if (obj.userData.ui === 'focus') { focusMode ? exitFocus() : enterFocus(); }
-    else if (obj.userData.ui === 'arc') {
+    const ui = obj.userData.ui;
+    if (ui === 'focus') { if (textMode) exitTextMode(); focusMode ? exitFocus() : enterFocus(); }
+    else if (ui === 'arc') {
       placed = {};
       store.set('mm.placed', placed);
-      if (!focusMode) layout();
+      if (!focusMode && !textMode) layout();
     }
-    else if (obj.userData.ui === 'skip' && focusMode) focusNext();
+    else if (ui === 'skip' && focusMode) focusNext();
+    else if (ui === 'lvl' && textMode) { textLevel = (textLevel + 1) % 4; renderTextPanel(); }
+    else if (ui === 'pg' && textMode)  { textPage++; renderTextPanel(); }
+    else if (ui === 'say' && textMode) speakCurrentPage();
+    else if (ui === 'back' && textMode) exitTextMode();
     return;
   }
   if (obj.userData.action) {
     const card = obj.userData.card;
     grade(card, obj.userData.action === 'ok');
+    duoSend('grade', { id: card.id, known: obj.userData.action === 'ok' });
     flip(card);
     const st = PALETTE[stateOf(card)];
     card.mesh.material[4].map.dispose();
@@ -765,9 +922,160 @@ panelBtn('RÉVISION', '#5b8def', 'focus', -0.31);
 panelBtn('RANGER', '#93a0c0', 'arc', 0);
 const skipBtn = panelBtn('PASSER', '#f2b544', 'skip', 0.31);
 skipBtn.visible = false;
+// rangée « texte long », visible uniquement en mode texte
+const txtBtns = [
+  panelBtn('NIVEAU', '#5b8def', 'lvl', -0.47),
+  panelBtn('PAGE', '#93a0c0', 'pg', -0.16),
+  panelBtn('LIRE', '#4cc38a', 'say', 0.15),
+  panelBtn('RETOUR', '#e5695f', 'back', 0.46)
+];
+txtBtns.forEach(b => { b.position.y = -0.13; b.visible = false; });
 panel.position.set(0, 1.02, -1.0);
 panel.rotation.x = -0.55;
 scene.add(panel);
+
+/* --- Décors --- */
+const starGeo = new THREE.BufferGeometry();
+{
+  const N = 1400, pos = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) {
+    const r = 22 + Math.random() * 22;
+    const t = Math.random() * Math.PI * 2;
+    const ph = Math.acos(2 * Math.random() - 1);
+    pos[i * 3]     = r * Math.sin(ph) * Math.cos(t);
+    pos[i * 3 + 1] = Math.abs(r * Math.cos(ph)) * 0.7 + 0.5;
+    pos[i * 3 + 2] = r * Math.sin(ph) * Math.sin(t);
+  }
+  starGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+}
+const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({ color: 0xbfd4ff, size: 0.12 }));
+stars.visible = false;
+scene.add(stars);
+
+function applyDecor() {
+  if (decor === 'étoiles') {
+    scene.background = new THREE.Color(0x04060d);
+    scene.fog = null;
+    stars.visible = true;
+  } else if (decor === 'désert') {
+    scene.background = new THREE.Color(0x241a10);
+    scene.fog = new THREE.Fog(0x241a10, 7, 22);
+    stars.visible = false;
+  } else {
+    scene.background = new THREE.Color(0x0b1020);
+    scene.fog = new THREE.Fog(0x0b1020, 7, 20);
+    stars.visible = false;
+  }
+}
+
+/* --- Mode texte long : effacement progressif --- */
+const textPanel = new THREE.Mesh(
+  new THREE.PlaneGeometry(1.9, 1.25),
+  new THREE.MeshBasicMaterial({ transparent: false })
+);
+textPanel.position.set(0, 1.5, -1.65);
+textPanel.visible = false;
+scene.add(textPanel);
+
+const WORDS_PER_PAGE = 100;
+
+function textPages(name) {
+  const words = String(texts[name] || '').split(/\s+/).filter(Boolean);
+  const pages = [];
+  for (let i = 0; i < words.length; i += WORDS_PER_PAGE) pages.push(words.slice(i, i + WORDS_PER_PAGE));
+  return pages.length ? pages : [[]];
+}
+
+function maskWord(w, level, idx) {
+  const m = w.match(/^([«"(']*)(.*?)([»")',.;:!?…]*)$/);
+  const pre = m[1], core = m[2], post = m[3];
+  if (!core) return w;
+  if (level === 0) return w;
+  if (level === 1) return (idx % 3 === 2) ? pre + '⸺' + post : w;
+  if (level === 2) return pre + core[0] + '·'.repeat(Math.max(1, Math.min(4, core.length - 1))) + post;
+  return pre + '⸺' + post;
+}
+
+function renderTextPanel() {
+  const pages = textPages(curText);
+  if (textPage >= pages.length) textPage = 0;
+  const words = pages[textPage].map((w, i) => maskWord(w, textLevel, i));
+
+  const W = 1280, H = 840;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#0d1428';
+  roundRect(ctx, 6, 6, W - 12, H - 12, 30);
+  ctx.fill();
+  ctx.lineWidth = 6;
+  ctx.strokeStyle = '#f2b544';
+  roundRect(ctx, 6, 6, W - 12, H - 12, 30);
+  ctx.stroke();
+
+  ctx.fillStyle = '#f2b544';
+  ctx.font = '600 26px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText(curText.toUpperCase().slice(0, 60), 48, 64);
+  ctx.fillStyle = '#93a0c0';
+  ctx.textAlign = 'right';
+  ctx.fillText('niveau : ' + LEVEL_NAMES[textLevel] + '   ·   page ' + (textPage + 1) + '/' + pages.length, W - 48, 64);
+
+  let size = 40;
+  let lines;
+  do {
+    ctx.font = '500 ' + size + 'px ui-sans-serif, system-ui, sans-serif';
+    lines = wrapLines(ctx, words.join(' '), W - 130);
+    size -= 2;
+  } while (lines.length * size * 1.42 > H - 160 && size > 18);
+
+  ctx.fillStyle = '#e8ecf8';
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'alphabetic';
+  const lh = size * 1.45;
+  lines.forEach((l, i) => ctx.fillText(l, 64, 130 + i * lh));
+
+  if (textPanel.material.map) textPanel.material.map.dispose();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  textPanel.material.map = tex;
+  textPanel.material.needsUpdate = true;
+}
+
+function enterTextMode() {
+  if (focusMode) exitFocus();
+  textMode = true;
+  textLevel = 0; textPage = 0;
+  cards.forEach(c => setCardVisible(c, false));
+  textPanel.visible = true;
+  txtBtns.forEach(b => { b.visible = true; });
+  skipBtn.visible = false;
+  renderTextPanel();
+  const b = document.getElementById('btn-text');
+  if (b) b.textContent = 'Quitter le texte';
+}
+
+function exitTextMode() {
+  textMode = false;
+  textPanel.visible = false;
+  txtBtns.forEach(b => { b.visible = false; });
+  cards.forEach(c => setCardVisible(c, true));
+  layout();
+  const b = document.getElementById('btn-text');
+  if (b) b.textContent = 'Mémoriser le texte';
+}
+
+function speakCurrentPage() {
+  const pages = textPages(curText);
+  const raw = (pages[textPage] || []).join(' ');
+  if (!window.speechSynthesis || !raw) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(raw);
+    u.lang = 'fr-FR'; u.rate = 0.92;
+    speechSynthesis.speak(u);   // lecture indépendante du réglage « Voix »
+  } catch (e) {}
+}
 
 function pickables() {
   return picking.concat(uiButtons).filter(m => m.visible !== false);
@@ -1098,13 +1406,150 @@ $('btn-pull').onclick = async () => {
   setTimeout(() => { $('btn-pull').textContent = 'Recevoir'; }, 2500);
 };
 
+/* --- Décor --- */
+$('btn-decor').onclick = () => {
+  decor = decor === 'nuit' ? 'étoiles' : decor === 'étoiles' ? 'désert' : 'nuit';
+  store.set('mm.decor', decor);
+  $('btn-decor').textContent = 'Décor : ' + decor;
+  applyDecor();
+};
+
+/* --- Stats --- */
+function renderStatsBox() {
+  const days = Object.keys(flog).sort();
+  let total = 0, ok = 0;
+  days.forEach(d => { total += flog[d].n; ok += flog[d].ok; });
+  $('st-total').textContent = total;
+  $('st-rate').textContent = total ? Math.round(100 * ok / total) + ' %' : '–';
+
+  // série de jours consécutifs se terminant aujourd'hui
+  let streak = 0;
+  const t = new Date();
+  for (;;) {
+    const dk = t.toISOString().slice(0, 10);
+    if (flog[dk] && flog[dk].n > 0) { streak++; t.setDate(t.getDate() - 1); }
+    else break;
+  }
+  $('st-streak').textContent = streak;
+
+  // 14 derniers jours
+  const wrap = $('st-days');
+  wrap.innerHTML = '';
+  const d2 = new Date(); d2.setDate(d2.getDate() - 13);
+  let maxN = 1;
+  const seq = [];
+  for (let i = 0; i < 14; i++) {
+    const dk = d2.toISOString().slice(0, 10);
+    const n = (flog[dk] && flog[dk].n) || 0;
+    seq.push({ dk, n });
+    maxN = Math.max(maxN, n);
+    d2.setDate(d2.getDate() + 1);
+  }
+  seq.forEach((e, i) => {
+    const bar = document.createElement('i');
+    bar.style.height = Math.max(4, Math.round(52 * e.n / maxN)) + 'px';
+    if (i === 13) bar.className = 'today';
+    bar.title = e.dk + ' — ' + e.n + ' révisions';
+    wrap.appendChild(bar);
+  });
+
+  // cartes les plus ratées
+  const ol = $('st-fails');
+  ol.innerHTML = '';
+  Object.entries(fails).sort((a, b) => b[1] - a[1]).slice(0, 5).forEach(([id, n]) => {
+    const li = document.createElement('li');
+    const front = id.split('::')[0];
+    li.innerHTML = '<b></b> — ' + n + ' échec' + (n > 1 ? 's' : '');
+    li.querySelector('b').textContent = front;
+    ol.appendChild(li);
+  });
+  if (!Object.keys(fails).length) ol.innerHTML = '<li>aucun échec enregistré — continue !</li>';
+}
+$('btn-stats').onclick = () => { renderStatsBox(); $('statsbox').classList.add('open'); };
+$('st-close').onclick = () => $('statsbox').classList.remove('open');
+
+/* --- Textes longs --- */
+function fillTextSelect() {
+  const sel = $('text-select');
+  sel.innerHTML = '';
+  Object.keys(texts).forEach(name => {
+    const o = document.createElement('option');
+    o.value = o.textContent = name;
+    if (name === curText) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+$('text-select').onchange = e => {
+  curText = e.target.value;
+  store.set('mm.curText', curText);
+  textPage = 0; textLevel = 0;
+  if (textMode) renderTextPanel();
+};
+$('btn-text').onclick = () => { textMode ? exitTextMode() : enterTextMode(); };
+$('btn-savetext').onclick = () => {
+  const name = $('text-name').value.trim();
+  const content = $('text-content').value.trim();
+  if (!name || !content) return;
+  texts[name] = content;
+  store.set('mm.texts', texts);
+  curText = name;
+  store.set('mm.curText', curText);
+  fillTextSelect();
+  if (textMode) { textPage = 0; renderTextPanel(); }
+};
+$('btn-deltext').onclick = () => {
+  const name = $('text-name').value.trim() || curText;
+  if (Object.keys(texts).length <= 1) return;
+  delete texts[name];
+  store.set('mm.texts', texts);
+  if (curText === name) { curText = Object.keys(texts)[0]; store.set('mm.curText', curText); }
+  fillTextSelect();
+  if (textMode) { textPage = 0; renderTextPanel(); }
+};
+
+/* --- Import CSV / TSV --- */
+$('csv-file').onchange = async e => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  const txt = await f.text();
+  const lines = txt.split(/\r?\n/).map(l => l.trim())
+    .filter(l => l && !l.startsWith('#'))
+    .map(l => {
+      const sep = l.includes('\t') ? '\t' : l.includes(';') ? ';' : ',';
+      const i = l.indexOf(sep);
+      if (i === -1) return null;
+      const front = l.slice(0, i).trim().replace(/^"|"$/g, '');
+      const back  = l.slice(i + 1).trim().replace(/^"|"$/g, '');
+      return front && back ? front + ' :: ' + back : null;
+    })
+    .filter(Boolean);
+  if (lines.length) {
+    $('deck-text').value = ($('deck-text').value.trim() + '\n' + lines.join('\n')).trim();
+    $('csv-status').textContent = lines.length + ' cartes importées — clique « Enregistrer ».';
+  } else {
+    $('csv-status').textContent = 'Aucune carte reconnue dans ce fichier.';
+  }
+  e.target.value = '';
+};
+
+/* --- Duo --- */
+$('btn-duo').onclick = toggleDuo;
+
+/* --- PWA : installation sur l'écran d'accueil --- */
+if ('serviceWorker' in navigator && location.protocol === 'https:') {
+  navigator.serviceWorker.register('./sw.js').catch(() => {});
+}
+
 $('btn-mode').textContent = onlyDue ? 'Mode : à revoir' : 'Mode : mur complet';
 $('btn-sens').textContent = reversed ? 'Sens : verso → recto' : 'Sens : recto → verso';
 $('btn-dispo').textContent = layoutMode === 'frise' ? 'Disposition : frise' : 'Disposition : arc';
 $('btn-voice').textContent = voiceOn ? 'Voix : oui' : 'Voix : non';
+$('btn-decor').textContent = 'Décor : ' + decor;
 $('api-key').value = store.get('mm.apikey', '');
 
+applyDecor();
 fillDeckSelect();
+fillTextSelect();
 rebuild();
 window.__mm = {
   cards: () => cards, rebuild, stateOf, activate, flip,
@@ -1116,7 +1561,13 @@ window.__mm = {
   decks: () => ({ names: Object.keys(decks), cur: curDeck }),
   switchDeck,
   layoutMode: () => layoutMode,
-  syncPush, syncPull
+  syncPush, syncPull,
+  enterTextMode, exitTextMode, maskWord,
+  textState: () => ({ textMode, textLevel, textPage, curText, pages: textPages(curText).length }),
+  textPanelVisible: () => textPanel.visible,
+  decor: () => decor,
+  statsData: () => ({ flog, fails }),
+  applyRemote, duoState: () => ({ duo, duoReady })
 };
 </script>
 </body>
