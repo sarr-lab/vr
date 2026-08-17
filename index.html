@@ -150,7 +150,8 @@
       <strong style="font-size:13px">Illustrer le paquet (images IA)</strong>
       <small>une image de contexte par carte — clé OpenAI requise, ~1&nbsp;¢ par image</small>
     </div>
-    <input id="img-key" type="password" placeholder="Clé API OpenAI (sk-…)" style="width:100%;margin-bottom:8px" />
+    <input id="img-key" type="password" placeholder="Clé API OpenAI (optionnel — laisser vide pour passer par ton serveur)" style="width:100%;margin-bottom:8px" />
+    <input id="proxy-pass" type="password" placeholder="Mot de passe du relais serveur (si tu en as défini un)" style="width:100%;margin-bottom:8px" />
     <div class="actions">
       <button id="btn-illustrate">Illustrer les cartes sans image</button>
       <span id="img-status" style="font-size:11px;color:var(--muted);align-self:center;max-width:280px"></span>
@@ -2286,24 +2287,43 @@ function shrinkToJpeg(im) {
   });
 }
 
-async function generateCardImage(key, front, back) {
-  const r = await fetch('https://api.openai.com/v1/images/generations', {
+/* Génère une image : par la clé locale si fournie, sinon via le relais serveur
+   (Edge Function mm-images — la clé OpenAI reste en secret côté Supabase). */
+async function fetchImageB64(prompt, size, quality) {
+  const key = document.getElementById('img-key').value.trim() || store.get('mm.imgkey', '');
+  let j;
+  if (key) {
+    store.set('mm.imgkey', key);
+    const r = await fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
+      body: JSON.stringify({ model: 'gpt-image-1', prompt, size, quality, n: 1 })
+    });
+    j = await r.json();
+    if (j.error) throw new Error(j.error.message || 'erreur API images');
+    const b64 = j.data && j.data[0] && j.data[0].b64_json;
+    if (!b64) throw new Error('réponse sans image');
+    return b64;
+  }
+  const pass = document.getElementById('proxy-pass').value.trim() || store.get('mm.proxypass', '');
+  if (pass) store.set('mm.proxypass', pass);
+  const r = await fetch(SUPA_URL + '/functions/v1/mm-images', {
     method: 'POST',
-    headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
-    body: JSON.stringify({
-      model: 'gpt-image-1',
-      prompt: 'Illustration symbolique et mémorable, sans aucun texte ni lettre, pour retenir cette idée : « ' +
-        front + (back ? ' — ' + back : '') + ' ». Peinture numérique cinématographique, scène unique frappante, ' +
-        'éclairage dramatique, riche en couleurs.',
-      size: '1024x1024',
-      quality: 'low',
-      n: 1
-    })
+    headers: { 'content-type': 'application/json', 'x-mm-pass': pass },
+    body: JSON.stringify({ prompt, size, quality })
   });
-  const j = await r.json();
-  if (j.error) throw new Error(j.error.message || 'erreur API images');
-  const b64 = j.data && j.data[0] && j.data[0].b64_json;
-  if (!b64) throw new Error('réponse sans image');
+  j = await r.json();
+  if (j.error) throw new Error(j.error);
+  if (!j.b64) throw new Error('réponse sans image');
+  return j.b64;
+}
+
+async function generateCardImage(front, back) {
+  const b64 = await fetchImageB64(
+    'Illustration symbolique et mémorable, sans aucun texte ni lettre, pour retenir cette idée : « ' +
+    front + (back ? ' — ' + back : '') + ' ». Peinture numérique cinématographique, scène unique frappante, ' +
+    'éclairage dramatique, riche en couleurs.',
+    '1024x1024', 'low');
   const im = new Image();
   await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = 'data:image/png;base64,' + b64; });
   return im;
@@ -2311,9 +2331,6 @@ async function generateCardImage(key, front, back) {
 
 $('btn-illustrate').onclick = async () => {
   const status = $('img-status');
-  const key = $('img-key').value.trim() || store.get('mm.imgkey', '');
-  if (!key) { status.textContent = 'Il faut une clé API OpenAI (platform.openai.com).'; return; }
-  store.set('mm.imgkey', key);
 
   const lines = $('deck-text').value.split('\n');
   const todo = [];
@@ -2329,7 +2346,7 @@ $('btn-illustrate').onclick = async () => {
     const parts = lines[li].split('::').map(s => s.trim());
     status.textContent = 'Image ' + (done + failed + 1) + '/' + todo.length + ' : ' + parts[0].slice(0, 30) + '…';
     try {
-      const im = await generateCardImage(key, parts[0], parts[1]);
+      const im = await generateCardImage(parts[0], parts[1]);
       const blob = await shrinkToJpeg(im);
       const name = 'img-' + Date.now() + '-' + li + '.jpg';
       const url = await uploadCardImage(blob, name);
@@ -2356,9 +2373,6 @@ $('btn-quest').onclick = () => { questMode ? exitQuest() : enterQuest(); };
 
 $('btn-panos').onclick = async () => {
   const status = $('pano-status');
-  const key = $('img-key').value.trim() || store.get('mm.imgkey', '');
-  if (!key) { status.textContent = 'Il faut ta clé API OpenAI (champ « Illustrer » ci-dessus).'; return; }
-  store.set('mm.imgkey', key);
   const q = quests[curQuest];
   const todo = q.chapters.filter(ch => !ch.pano);
   if (!todo.length) { status.textContent = 'Tous les panoramas sont déjà générés.'; return; }
@@ -2367,22 +2381,10 @@ $('btn-panos').onclick = async () => {
   for (const ch of todo) {
     status.textContent = 'Panorama « ' + ch.titre + ' »… (' + (done + 1) + '/' + todo.length + ')';
     try {
-      const r = await fetch('https://api.openai.com/v1/images/generations', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
-        body: JSON.stringify({
-          model: 'gpt-image-1',
-          prompt: 'Panorama équirectangulaire 360 degrés sans couture, projection sphérique complète : ' + ch.scene +
-            '. Vue immersive à hauteur d\'homme, aucun texte, aucune lettre, style peinture numérique cinématographique très détaillée.',
-          size: '1536x1024',
-          quality: 'medium',
-          n: 1
-        })
-      });
-      const j = await r.json();
-      if (j.error) throw new Error(j.error.message || 'erreur API');
-      const b64 = j.data && j.data[0] && j.data[0].b64_json;
-      if (!b64) throw new Error('réponse sans image');
+      const b64 = await fetchImageB64(
+        'Panorama équirectangulaire 360 degrés sans couture, projection sphérique complète : ' + ch.scene +
+        '. Vue immersive à hauteur d\'homme, aucun texte, aucune lettre, style peinture numérique cinématographique très détaillée.',
+        '1536x1024', 'medium');
       const im = new Image();
       await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = 'data:image/png;base64,' + b64; });
       // étire vers le ratio 2:1 attendu par la sphère
@@ -2419,6 +2421,7 @@ $('btn-voice').textContent = voiceOn ? 'Voix : oui' : 'Voix : non';
 $('btn-decor').textContent = 'Décor : ' + decor;
 $('api-key').value = store.get('mm.apikey', '');
 $('img-key').value = store.get('mm.imgkey', '');
+$('proxy-pass').value = store.get('mm.proxypass', '');
 
 applyDecor();
 fillDeckSelect();
