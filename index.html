@@ -304,6 +304,28 @@ if (!decks) {
 let curDeck = store.get('mm.curDeck', '48 lois du pouvoir');
 if (!decks[curDeck]) curDeck = Object.keys(decks)[0];
 
+// Auto-réparation : complète les images manquantes des paquets par défaut
+// quand la même carte existe localement sans son illustration.
+(function healDeckImages() {
+  let changed = false;
+  [['48 lois du pouvoir', DEFAULT_DECK], ['Histoire africaine', HISTORY_DECK]].forEach(([name, defText]) => {
+    if (!decks[name]) return;
+    const defMap = {};
+    defText.split('\n').forEach(l => {
+      const p = l.split('::').map(s => s.trim());
+      if (p[0] && p[1] && p[2]) defMap[p[0] + ' ' + p[1]] = p[2];
+    });
+    const updated = decks[name].split('\n').map(l => {
+      const p = l.split('::').map(s => s.trim());
+      const k = (p[0] || '') + ' ' + (p[1] || '');
+      if (p[0] && p[1] && !p[2] && defMap[k]) { changed = true; return p[0] + ' :: ' + p[1] + ' :: ' + defMap[k]; }
+      return l;
+    }).join('\n');
+    decks[name] = updated;
+  });
+  if (changed) store.set('mm.decks', decks);
+})();
+
 // Textes longs (mémorisation par effacement progressif)
 const SAMPLE_TEXT_NAME = 'Le Laboureur et ses Enfants (La Fontaine)';
 const SAMPLE_TEXT =
@@ -394,6 +416,26 @@ let quests = store.get('mm.quests', null);
 if (!quests) { quests = {}; quests[DEFAULT_QUEST.name] = DEFAULT_QUEST; store.set('mm.quests', quests); }
 if (!quests[DEFAULT_QUEST.name]) { quests[DEFAULT_QUEST.name] = DEFAULT_QUEST; store.set('mm.quests', quests); }
 let curQuest = DEFAULT_QUEST.name;
+
+// Auto-réparation : si l'état local (ex. le casque) a la quête par défaut sans
+// ses médias (panoramas, voix), on les complète depuis les valeurs du site.
+(function healQuestMedia() {
+  const sq = quests[DEFAULT_QUEST.name];
+  if (!sq || !sq.chapters) return;
+  let changed = false;
+  DEFAULT_QUEST.chapters.forEach((dc, i) => {
+    const sc = sq.chapters[i];
+    if (!sc) return;
+    if (!sc.pano && dc.pano) { sc.pano = dc.pano; changed = true; }
+    if (!sc.audio && dc.audio) { sc.audio = dc.audio; changed = true; }
+    if (sc.cle && dc.cle && !sc.cle.audio && dc.cle.audio) { sc.cle.audio = dc.cle.audio; changed = true; }
+    (sc.info || []).forEach((si, j) => {
+      const di = dc.info && dc.info[j];
+      if (di && !si.audio && di.audio) { si.audio = di.audio; changed = true; }
+    });
+  });
+  if (changed) store.set('mm.quests', quests);
+})();
 
 let decor = store.get('mm.decor', 'nuit');   // nuit | étoiles | désert
 
@@ -1281,18 +1323,41 @@ scene.add(questGrp);
 let panoSphere = null, qHotspots = [], qInfoPanel = null, qAnswers = [], qTitleBar = null;
 
 /* Voix : fichier audio pré-généré si disponible (fonctionne au casque),
-   sinon synthèse du navigateur (fonctionne sur PC). */
-let qAudio = null;
+   sinon synthèse du navigateur (fonctionne sur PC).
+   Un lecteur UNIQUE, déverrouillé au premier geste de l'utilisateur, puis
+   réutilisé : contourne la politique d'autoplay du navigateur (PC et Quest). */
+const qAudio = document.createElement('audio');
+qAudio.setAttribute('playsinline', '');
+qAudio.preload = 'auto';
+let audioUnlocked = false;
+const SILENT_WAV = 'data:audio/wav;base64,UklGRiQAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQAAAAA=';
+
+function unlockAudio() {
+  if (audioUnlocked) return;
+  audioUnlocked = true;
+  try {
+    qAudio.src = SILENT_WAV;
+    qAudio.play().catch(() => { audioUnlocked = false; });
+  } catch (e) { audioUnlocked = false; }
+}
+addEventListener('pointerdown', unlockAudio);
+
 function stopAudio() {
-  try { if (qAudio) { qAudio.pause(); qAudio = null; } } catch (e) {}
+  try { qAudio.pause(); } catch (e) {}
   try { speechSynthesis.cancel(); } catch (e) {}
 }
+
 function speakNow(text, audioUrl) {
   stopAudio();
   if (audioUrl) {
     try {
-      qAudio = new Audio(audioUrl);
-      qAudio.play().catch(() => {});
+      qAudio.src = audioUrl;
+      qAudio.currentTime = 0;
+      const p = qAudio.play();
+      if (p && p.catch) p.catch(() => {
+        // seconde chance : certains navigateurs n'acceptent qu'après un léger délai
+        setTimeout(() => { qAudio.play().catch(() => {}); }, 250);
+      });
       return;
     } catch (e) {}
   }
@@ -1872,6 +1937,7 @@ for (let i = 0; i < 2; i++) {
   });
 
   ctrl.addEventListener('selectstart', () => {
+    unlockAudio();   // le geste VR déverrouille aussi le lecteur audio
     const o = rayFrom(ctrl);
     if (ctrl.userData.isHand) {
       // mains : pincement court = activer, pincement maintenu = saisir
