@@ -145,6 +145,16 @@
     </div>
     <hr class="sep" />
     <div class="row">
+      <strong style="font-size:13px">Illustrer le paquet (images IA)</strong>
+      <small>une image de contexte par carte — clé OpenAI requise, ~1&nbsp;¢ par image</small>
+    </div>
+    <input id="img-key" type="password" placeholder="Clé API OpenAI (sk-…)" style="width:100%;margin-bottom:8px" />
+    <div class="actions">
+      <button id="btn-illustrate">Illustrer les cartes sans image</button>
+      <span id="img-status" style="font-size:11px;color:var(--muted);align-self:center;max-width:280px"></span>
+    </div>
+    <hr class="sep" />
+    <div class="row">
       <strong style="font-size:13px">Générer des cartes par IA</strong>
       <small>ta clé reste dans ton navigateur, elle n'est envoyée qu'à Anthropic</small>
     </div>
@@ -428,16 +438,15 @@ function speak(text) {
 const keyOf = (f, b) => (f + '::' + b).slice(0, 140);
 
 function parseDeck(text) {
+  // format : recto :: verso :: url-image (le 3e champ est facultatif)
   const raw = text.split('\n').map(l => l.trim()).filter(Boolean).map(line => {
-    const i = line.indexOf('::');
-    const front = i === -1 ? line : line.slice(0, i).trim();
-    const back  = i === -1 ? ''   : line.slice(i + 2).trim();
-    return { front, back };
+    const parts = line.split('::').map(s => s.trim());
+    return { front: parts[0] || '', back: parts[1] || '', img: parts[2] || '' };
   }).filter(c => c.front);
 
   return raw.map(c => reversed && c.back
-    ? { front: c.back, back: c.front, id: keyOf(c.front, c.back) }
-    : { front: c.front, back: c.back, id: keyOf(c.front, c.back) });
+    ? { front: c.back, back: c.front, img: c.img, id: keyOf(c.front, c.back) }
+    : { front: c.front, back: c.back, img: c.img, id: keyOf(c.front, c.back) });
 }
 
 function stateOf(card) {
@@ -565,7 +574,7 @@ function wrapLines(ctx, text, maxW) {
   return lines;
 }
 
-function makeFace(text, opts) {
+function makeFace(text, opts, im) {
   const W = 768, H = 480;
   const cv = document.createElement('canvas');
   cv.width = W; cv.height = H;
@@ -574,6 +583,23 @@ function makeFace(text, opts) {
   ctx.fillStyle = opts.tint;
   roundRect(ctx, 8, 8, W - 16, H - 16, 34);
   ctx.fill();
+
+  // image de contexte en fond (recadrée pour couvrir), assombrie pour la lisibilité
+  if (im) {
+    ctx.save();
+    roundRect(ctx, 8, 8, W - 16, H - 16, 34);
+    ctx.clip();
+    const s = Math.max((W - 16) / im.width, (H - 16) / im.height);
+    const iw = im.width * s, ih = im.height * s;
+    try { ctx.drawImage(im, (W - iw) / 2, (H - ih) / 2, iw, ih); } catch (e) {}
+    const g = ctx.createLinearGradient(0, 0, 0, H);
+    g.addColorStop(0, opts.dimTop || 'rgba(8,12,26,0.25)');
+    g.addColorStop(0.55, 'rgba(8,12,26,0.35)');
+    g.addColorStop(1, 'rgba(8,12,26,0.88)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, W, H);
+    ctx.restore();
+  }
 
   ctx.lineWidth = 8;
   ctx.strokeStyle = opts.edge;
@@ -596,16 +622,52 @@ function makeFace(text, opts) {
   } while (lines.length * size * 1.28 > H - 170 && size > 20);
 
   ctx.fillStyle = '#eef2fb';
+  if (im) { ctx.shadowColor = 'rgba(0,0,0,0.85)'; ctx.shadowBlur = 10; }
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   const lh = size * 1.3;
-  const y0 = H / 2 + 14 - ((lines.length - 1) * lh) / 2;
-  lines.forEach((l, i) => ctx.fillText(l, W / 2, y0 + i * lh));
+  if (im) {
+    // avec image : texte ancré en bas pour laisser voir la scène
+    lines.forEach((l, i) => ctx.fillText(l, W / 2, H - 64 - (lines.length - 1 - i) * lh));
+  } else {
+    const y0 = H / 2 + 14 - ((lines.length - 1) * lh) / 2;
+    lines.forEach((l, i) => ctx.fillText(l, W / 2, y0 + i * lh));
+  }
+  ctx.shadowBlur = 0;
 
   const tex = new THREE.CanvasTexture(cv);
   tex.colorSpace = THREE.SRGBColorSpace;
   tex.anisotropy = 4;
   return tex;
+}
+
+/* Cache d'images de cartes */
+const IMG_CACHE = new Map();   // url -> Promise<HTMLImageElement|null>
+function loadImg(url) {
+  if (!url) return Promise.resolve(null);
+  if (IMG_CACHE.has(url)) return IMG_CACHE.get(url);
+  const p = new Promise(res => {
+    const im = new Image();
+    im.crossOrigin = 'anonymous';
+    im.onload = () => res(im);
+    im.onerror = () => res(null);
+    im.src = url;
+  });
+  IMG_CACHE.set(url, p);
+  return p;
+}
+
+/* (Re)dessine les deux faces d'une carte, avec son image si elle en a une */
+function applyFaces(card, im) {
+  if (!card.mesh) return;
+  const st = PALETTE[stateOf(card)];
+  const m4 = card.mesh.material[4], m5 = card.mesh.material[5];
+  if (m4.map) m4.map.dispose();
+  if (m5.map) m5.map.dispose();
+  m4.map = makeFace(card.front, { ...st, big: true }, im || null);
+  m5.map = makeFace(card.back || '—', { ...st, label: 'réponse' }, im || null);
+  m4.needsUpdate = true;
+  m5.needsUpdate = true;
 }
 
 function makeButtonTex(text, color) {
@@ -669,6 +731,10 @@ function buildCard(card) {
   ];
   const mesh = new THREE.Mesh(new THREE.BoxGeometry(CARD_W, CARD_H, CARD_D), mats);
   mesh.userData.card = card;
+  card.mesh = mesh;
+
+  // image de contexte : redessine les faces dès qu'elle est chargée
+  if (card.img) loadImg(card.img).then(im => { if (im && card.mesh === mesh) applyFaces(card, im); });
 
   const pivot = new THREE.Group();
   pivot.add(mesh);
@@ -888,13 +954,8 @@ function activate(obj) {
     grade(card, obj.userData.action === 'ok');
     duoSend('grade', { id: card.id, known: obj.userData.action === 'ok' });
     flip(card);
-    const st = PALETTE[stateOf(card)];
-    card.mesh.material[4].map.dispose();
-    card.mesh.material[5].map.dispose();
-    card.mesh.material[4].map = makeFace(card.front, { ...st, big: true });
-    card.mesh.material[5].map = makeFace(card.back || '—', { ...st, label: 'réponse' });
-    card.mesh.material[4].needsUpdate = true;
-    card.mesh.material[5].needsUpdate = true;
+    if (card.img) loadImg(card.img).then(im => applyFaces(card, im));
+    else applyFaces(card, null);
     refreshStats();
     if (focusMode) focusNext();
     return;
@@ -1532,6 +1593,92 @@ $('csv-file').onchange = async e => {
   e.target.value = '';
 };
 
+/* --- Illustration des cartes par IA --- */
+const SUPA_URL = 'https://xfcpseixozmikaxfkxxv.supabase.co';
+
+async function uploadCardImage(blob, name) {
+  const r = await fetch(SUPA_URL + '/storage/v1/object/mm-img/' + name, {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + SYNC_KEY, apikey: SYNC_KEY, 'Content-Type': 'image/jpeg' },
+    body: blob
+  });
+  if (!r.ok) throw new Error('hébergement : HTTP ' + r.status);
+  return SUPA_URL + '/storage/v1/object/public/mm-img/' + name;
+}
+
+function shrinkToJpeg(im) {
+  return new Promise(res => {
+    const cv = document.createElement('canvas');
+    cv.width = 768; cv.height = 480;
+    const ctx = cv.getContext('2d');
+    const s = Math.max(768 / im.width, 480 / im.height);
+    ctx.drawImage(im, (768 - im.width * s) / 2, (480 - im.height * s) / 2, im.width * s, im.height * s);
+    cv.toBlob(b => res(b), 'image/jpeg', 0.84);
+  });
+}
+
+async function generateCardImage(key, front, back) {
+  const r = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
+    body: JSON.stringify({
+      model: 'gpt-image-1',
+      prompt: 'Illustration symbolique et mémorable, sans aucun texte ni lettre, pour retenir cette idée : « ' +
+        front + (back ? ' — ' + back : '') + ' ». Peinture numérique cinématographique, scène unique frappante, ' +
+        'éclairage dramatique, riche en couleurs.',
+      size: '1024x1024',
+      quality: 'low',
+      n: 1
+    })
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error.message || 'erreur API images');
+  const b64 = j.data && j.data[0] && j.data[0].b64_json;
+  if (!b64) throw new Error('réponse sans image');
+  const im = new Image();
+  await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = 'data:image/png;base64,' + b64; });
+  return im;
+}
+
+$('btn-illustrate').onclick = async () => {
+  const status = $('img-status');
+  const key = $('img-key').value.trim() || store.get('mm.imgkey', '');
+  if (!key) { status.textContent = 'Il faut une clé API OpenAI (platform.openai.com).'; return; }
+  store.set('mm.imgkey', key);
+
+  const lines = $('deck-text').value.split('\n');
+  const todo = [];
+  lines.forEach((l, i) => {
+    const parts = l.split('::').map(s => s.trim());
+    if (parts[0] && parts[1] && !parts[2]) todo.push(i);
+  });
+  if (!todo.length) { status.textContent = 'Toutes les cartes de ce paquet ont déjà une image.'; return; }
+
+  $('btn-illustrate').disabled = true;
+  let done = 0, failed = 0;
+  for (const li of todo) {
+    const parts = lines[li].split('::').map(s => s.trim());
+    status.textContent = 'Image ' + (done + failed + 1) + '/' + todo.length + ' : ' + parts[0].slice(0, 30) + '…';
+    try {
+      const im = await generateCardImage(key, parts[0], parts[1]);
+      const blob = await shrinkToJpeg(im);
+      const name = 'img-' + Date.now() + '-' + li + '.jpg';
+      const url = await uploadCardImage(blob, name);
+      lines[li] = parts[0] + ' :: ' + parts[1] + ' :: ' + url;
+      $('deck-text').value = lines.join('\n');
+      done++;
+    } catch (e) {
+      failed++;
+      status.textContent = 'Échec sur « ' + parts[0].slice(0, 24) + ' » : ' + e.message;
+      if (/incorrect api key|invalid/i.test(e.message)) break;   // inutile d'insister
+    }
+  }
+  status.textContent = done + ' image' + (done > 1 ? 's' : '') + ' créée' + (done > 1 ? 's' : '') +
+    (failed ? ' · ' + failed + ' échec' + (failed > 1 ? 's' : '') : '') +
+    ' — clique « Enregistrer » pour les voir sur le mur.';
+  $('btn-illustrate').disabled = false;
+};
+
 /* --- Duo --- */
 $('btn-duo').onclick = toggleDuo;
 
@@ -1546,6 +1693,7 @@ $('btn-dispo').textContent = layoutMode === 'frise' ? 'Disposition : frise' : 'D
 $('btn-voice').textContent = voiceOn ? 'Voix : oui' : 'Voix : non';
 $('btn-decor').textContent = 'Décor : ' + decor;
 $('api-key').value = store.get('mm.apikey', '');
+$('img-key').value = store.get('mm.imgkey', '');
 
 applyDecor();
 fillDeckSelect();
