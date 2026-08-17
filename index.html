@@ -37,6 +37,17 @@
   #editor .actions{display:flex;gap:8px;margin-top:10px}
   #hint{bottom:78px;left:50%;transform:translateX(-50%);padding:10px 16px;font-size:12px;color:var(--muted);white-space:nowrap}
   kbd{background:#16203c;border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:11px}
+  select{pointer-events:auto;font:inherit;font-size:12px;padding:8px;border-radius:9px;
+    border:1px solid var(--line);background:#16203c;color:var(--ink);max-width:250px}
+  #tools input, #editor input{pointer-events:auto;font:inherit;font-size:12px;padding:8px 10px;border-radius:9px;
+    border:1px solid var(--line);background:#080d1c;color:var(--ink)}
+  #sync-code{width:110px}
+  #editor{max-height:72vh;overflow:auto}
+  #editor .sep{border:0;border-top:1px solid var(--line);margin:14px 0 10px}
+  #gen-status{font-size:11px;color:var(--muted);align-self:center;max-width:280px}
+  #deck-name,#api-key{width:100%;margin-bottom:8px}
+  #gen-src{height:90px!important}
+  button.danger{border-color:#5c2622;color:#f0a49e}
 </style>
 </head>
 <body>
@@ -52,13 +63,20 @@
   </div>
 
   <div class="panel" id="tools">
+    <select id="deck-select" title="Choisir le paquet"></select>
+    <button id="btn-newdeck">+ Paquet</button>
     <button id="btn-mode">Mode : mur complet</button>
     <button id="btn-sens">Sens : recto → verso</button>
+    <button id="btn-dispo">Disposition : arc</button>
+    <button id="btn-voice">Voix : non</button>
     <button id="btn-shuffle">Mélanger</button>
     <button id="btn-reset">Réinitialiser</button>
     <button id="btn-focus">Révision guidée</button>
     <button id="btn-arc">Ranger en arc</button>
     <button id="btn-edit" class="primary">Éditer le paquet</button>
+    <input id="sync-code" placeholder="code de sync" title="Le même code sur chaque appareil relie les progressions" />
+    <button id="btn-push">Envoyer</button>
+    <button id="btn-pull">Recevoir</button>
   </div>
 
   <div class="panel" id="editor">
@@ -66,10 +84,23 @@
       <strong style="font-size:13px">Paquet de cartes</strong>
       <small>une carte par ligne — <code>recto :: verso</code></small>
     </div>
+    <input id="deck-name" placeholder="Nom du paquet" spellcheck="false" />
     <textarea id="deck-text" spellcheck="false"></textarea>
     <div class="actions">
       <button class="primary" id="btn-save">Enregistrer et reconstruire</button>
       <button id="btn-cancel">Annuler</button>
+      <button id="btn-deldeck" class="danger">Supprimer ce paquet</button>
+    </div>
+    <hr class="sep" />
+    <div class="row">
+      <strong style="font-size:13px">Générer des cartes par IA</strong>
+      <small>ta clé reste dans ton navigateur, elle n'est envoyée qu'à Anthropic</small>
+    </div>
+    <textarea id="gen-src" spellcheck="false" placeholder="Colle ici un texte (chapitre, cours, article…) et l'IA le transforme en cartes ajoutées au paquet ci-dessus."></textarea>
+    <input id="api-key" type="password" placeholder="Clé API Anthropic (sk-ant-…)" />
+    <div class="actions">
+      <button id="btn-gen">Générer les cartes</button>
+      <span id="gen-status"></span>
     </div>
   </div>
 
@@ -156,18 +187,106 @@ const DEFAULT_DECK = [
   "Loi 48 :: Adopter la forme sans forme"
 ].join("\n");
 
+// Paquet chronologique : en disposition « frise », les cartes s'alignent dans cet ordre.
+const HISTORY_DECK = [
+  "Kerma et la Nubie (v. 2500 av. J.-C.) :: Premier grand royaume d'Afrique subsaharienne, sur le Nil, rival de l'Égypte",
+  "Koush — Napata puis Méroé :: Les « pharaons noirs » de la XXVe dynastie conquièrent l'Égypte au VIIIe s. av. J.-C.",
+  "Royaume d'Aksoum (Ier–VIIe s.) :: Puissance commerciale de la mer Rouge, adopte le christianisme au IVe siècle",
+  "Empire du Ghana / Wagadou (VIIIe–XIe s.) :: Premier grand empire ouest-africain, prospère grâce à l'or et au sel",
+  "1235 — Bataille de Kirina :: Soundiata Keïta bat Soumaoro Kanté et fonde l'empire du Mali",
+  "Charte du Manden (XIIIe s.) :: Une des plus anciennes déclarations de droits au monde, proclamée sous Soundiata",
+  "1324 — Pèlerinage de Mansa Moussa :: Son passage au Caire fait chuter le cours de l'or ; le Mali devient légendaire",
+  "Tombouctou et Sankoré :: Mosquée-université, grand centre d'érudition, des dizaines de milliers de manuscrits",
+  "Empire Songhaï (XVe–XVIe s.) :: Depuis Gao, Sonni Ali Ber puis les Askia dominent la boucle du Niger",
+  "Askia Mohamed (r. 1493–1528) :: Réorganise le Songhaï, mécène des savants, pèlerinage fastueux à La Mecque",
+  "1591 — Bataille de Tondibi :: L'armée marocaine armée de mousquets brise l'empire Songhaï",
+  "Kanem-Bornou (IXe–XIXe s.) :: Empire millénaire autour du lac Tchad, carrefour du commerce transsaharien",
+  "Grand Zimbabwe (XIe–XVe s.) :: Cité de pierre d'Afrique australe, cœur du commerce de l'or vers la côte swahilie",
+  "Côte swahilie — Kilwa, Mombasa, Zanzibar :: Cités marchandes reliant l'Afrique à l'Inde et à la Chine",
+  "Royaume du Bénin (Edo) :: Célèbre pour ses bronzes ; l'Oba règne depuis Benin City",
+  "Empire ashanti (XVIIe–XIXe s.) :: Autour de Kumasi, uni par le Trône d'or ; longue résistance aux Britanniques",
+  "Ousmane dan Fodio (1804) :: Fonde le califat de Sokoto, plus grand État d'Afrique de l'Ouest au XIXe siècle",
+  "El Hadj Oumar Tall (XIXe s.) :: Savant et conquérant toucouleur, bâtit un empire du Sénégal au Mali",
+  "Samori Touré (1830–1900) :: Fondateur de l'empire du Wassoulou, résiste dix-sept ans à la conquête française",
+  "Lat Dior Ngoné Latyr Diop (1842–1886) :: Damel du Cayor, héros de la résistance sénégalaise",
+  "Cheikh Ahmadou Bamba (1853–1927) :: Fondateur du mouridisme, résistance spirituelle pacifique ; exilé par les Français"
+].join("\n");
+
 /* ============================== 3. État ============================== */
 const DAY = 86400000;
 const INTERVALS = [0, 1, 3, 7, 16, 35];        // Leitner, en jours
 
-let deckText = store.get('mm.deck', DEFAULT_DECK);
-let progress = store.get('mm.progress', {});   // clé -> { box, due }
-let onlyDue  = store.get('mm.onlyDue', false);
-let reversed = store.get('mm.reversed', false);
-let order    = null;                           // ordre mélangé éventuel
-let placed   = store.get('mm.placed', {});     // palais de mémoire : id -> { p, q }
-let cards    = [];
-let focusMode = false, queue = [], qi = 0;     // mode révision guidée
+// Multi-paquets (migre l'ancien stockage mono-paquet si présent)
+let decks = store.get('mm.decks', null);
+if (!decks) {
+  const legacy = store.get('mm.deck', null);
+  decks = {
+    '48 lois du pouvoir': legacy || DEFAULT_DECK,
+    'Histoire africaine': HISTORY_DECK
+  };
+  store.set('mm.decks', decks);
+}
+let curDeck = store.get('mm.curDeck', '48 lois du pouvoir');
+if (!decks[curDeck]) curDeck = Object.keys(decks)[0];
+
+let deckText   = decks[curDeck];
+let progress   = store.get('mm.progress', {});   // clé -> { box, due }
+let onlyDue    = store.get('mm.onlyDue', false);
+let reversed   = store.get('mm.reversed', false);
+let layoutMode = store.get('mm.layout', 'arc');  // 'arc' | 'frise'
+let voiceOn    = store.get('mm.voice', false);
+let order      = null;                           // ordre mélangé éventuel
+let placed     = store.get('mm.placed', {});     // palais de mémoire : id -> { p, q }
+let cards      = [];
+let focusMode = false, queue = [], qi = 0;       // mode révision guidée
+
+/* --- Synchronisation entre appareils (par code secret) --- */
+const SYNC_URL = 'https://xfcpseixozmikaxfkxxv.supabase.co/rest/v1/mm_sync';
+const SYNC_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhmY3BzZWl4b3ptaWtheGZreHh2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjA2MDc2MjksImV4cCI6MjA3NjE4MzYyOX0.pcFhlhHbJRGnWd1TucC7oPVuwrI0QWoTgaxuFSAwfJ8';
+const syncHeaders = {
+  apikey: SYNC_KEY,
+  Authorization: 'Bearer ' + SYNC_KEY,
+  'Content-Type': 'application/json'
+};
+
+async function syncPush(code) {
+  const body = JSON.stringify({
+    code,
+    data: { decks, progress, placed, curDeck },
+    updated_at: new Date().toISOString()
+  });
+  const r = await fetch(SYNC_URL + '?on_conflict=code', {
+    method: 'POST',
+    headers: { ...syncHeaders, Prefer: 'resolution=merge-duplicates' },
+    body
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+}
+
+async function syncPull(code) {
+  const r = await fetch(SYNC_URL + '?code=eq.' + encodeURIComponent(code) + '&select=data', { headers: syncHeaders });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const rows = await r.json();
+  if (!rows.length) throw new Error('code inconnu');
+  const d = rows[0].data || {};
+  if (d.decks)    { decks = d.decks;       store.set('mm.decks', decks); }
+  if (d.progress) { progress = d.progress; store.set('mm.progress', progress); }
+  if (d.placed)   { placed = d.placed;     store.set('mm.placed', placed); }
+  if (d.curDeck && decks[d.curDeck]) { curDeck = d.curDeck; store.set('mm.curDeck', curDeck); }
+  deckText = decks[curDeck];
+}
+
+/* --- Voix (synthèse vocale) --- */
+function speak(text) {
+  if (!voiceOn || !window.speechSynthesis || !text) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'fr-FR';
+    u.rate = 0.95;
+    speechSynthesis.speak(u);
+  } catch (e) { /* silencieux */ }
+}
 
 const keyOf = (f, b) => (f + '::' + b).slice(0, 140);
 
@@ -207,7 +326,7 @@ scene.fog = new THREE.Fog(0x0b1020, 7, 20);
 const camera = new THREE.PerspectiveCamera(70, innerWidth / innerHeight, 0.05, 100);
 camera.position.set(0, 1.6, 0);
 
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
 renderer.xr.enabled = true;
@@ -217,6 +336,45 @@ document.body.appendChild(renderer.domElement);
 const vrBtn = VRButton.createButton(renderer);
 vrBtn.style.zIndex = '20';
 document.body.appendChild(vrBtn);
+
+/* --- Réalité mixte (passthrough) : les cartes flottent dans ta vraie pièce --- */
+const mrBtn = document.createElement('button');
+mrBtn.textContent = 'RÉALITÉ MIXTE';
+mrBtn.style.cssText = 'position:fixed;bottom:20px;left:calc(50% + 80px);z-index:20;padding:12px 14px;' +
+  'border:1px solid #fff;border-radius:4px;background:rgba(0,0,0,.35);color:#fff;font:600 13px sans-serif;' +
+  'cursor:pointer;opacity:.85;display:none';
+document.body.appendChild(mrBtn);
+
+if (navigator.xr && navigator.xr.isSessionSupported) {
+  navigator.xr.isSessionSupported('immersive-ar')
+    .then(ok => { if (ok) mrBtn.style.display = 'block'; })
+    .catch(() => {});
+}
+
+mrBtn.onclick = async () => {
+  try {
+    const session = await navigator.xr.requestSession('immersive-ar', {
+      optionalFeatures: ['local-floor', 'hand-tracking']
+    });
+    renderer.xr.setReferenceSpaceType('local-floor');
+    await renderer.xr.setSession(session);
+  } catch (e) { /* refusé ou indisponible */ }
+};
+
+let savedBg = null, savedFog = null;
+renderer.xr.addEventListener('sessionstart', () => {
+  const s = renderer.xr.getSession();
+  const isAR = s && s.environmentBlendMode && s.environmentBlendMode !== 'opaque';
+  if (isAR) {
+    savedBg = scene.background; savedFog = scene.fog;
+    scene.background = null;      // laisse voir la pièce réelle
+    scene.fog = null;
+    grid.visible = false;
+  }
+});
+renderer.xr.addEventListener('sessionend', () => {
+  if (savedBg) { scene.background = savedBg; scene.fog = savedFog; grid.visible = true; savedBg = null; }
+});
 
 scene.add(new THREE.HemisphereLight(0x9fc0ff, 0x101830, 1.6));
 const keyLight = new THREE.DirectionalLight(0xffffff, 0.85);
@@ -397,11 +555,24 @@ function buildCard(card) {
   return pivot;
 }
 
-// Disposition en arc cylindrique autour de l'utilisateur : max 3 rangées,
-// hauteur confortable (0.95 m – 2.05 m), on tourne la tête plutôt que de lever les yeux.
+// Deux dispositions :
+// - « arc » : cylindre autour de l'utilisateur, max 3 rangées (+ positions du palais de mémoire)
+// - « frise » : longue ligne chronologique que l'on parcourt en marchant
 function layout() {
   const n = cards.length;
   if (!n) return;
+
+  if (layoutMode === 'frise') {
+    const gap = CARD_W + 0.22;
+    cards.forEach((card, i) => {
+      const p = card.pivot;
+      p.position.set((i - (n - 1) / 2) * gap, 1.5, -1.9);
+      p.rotation.set(0, 0, 0);
+      p.userData.home = p.position.clone();
+      p.userData.homeQ = p.quaternion.clone();
+    });
+    return;
+  }
 
   const MAX_ROWS = 3, PER_ROW_TARGET = 16;
   const rows = Math.min(MAX_ROWS, Math.max(1, Math.ceil(n / PER_ROW_TARGET)));
@@ -471,7 +642,7 @@ function refreshStats() {
   document.getElementById('n-due').textContent = d;
   document.getElementById('n-ok').textContent  = o;
   document.getElementById('deckname').textContent =
-    all.length + ' cartes · ' + cards.length + ' affichées';
+    curDeck + ' — ' + all.length + ' cartes · ' + cards.length + ' affichées';
 }
 
 /* ================== 6b. Palais de mémoire + focus ==================== */
@@ -514,6 +685,7 @@ function showFocus() {
   setCardVisible(c, true);
   c.pivot.position.set(0, 1.55, -1.15);
   c.pivot.lookAt(0, 1.55, 0);
+  speak(c.front);
 }
 
 function focusNext() {
@@ -540,6 +712,7 @@ function flip(card) {
   card.flipped = !card.flipped;
   card.flipTarget = card.flipped ? Math.PI : 0;
   card.buttons.forEach(b => { b.visible = card.flipped; });
+  if (card.flipped) speak(card.back || card.front);
 }
 
 function activate(obj) {
@@ -771,22 +944,167 @@ $('btn-arc').onclick = () => {
   if (!focusMode) layout();
 };
 
+/* --- Paquets --- */
+function fillDeckSelect() {
+  const sel = $('deck-select');
+  sel.innerHTML = '';
+  Object.keys(decks).forEach(name => {
+    const o = document.createElement('option');
+    o.value = o.textContent = name;
+    if (name === curDeck) o.selected = true;
+    sel.appendChild(o);
+  });
+}
+
+function switchDeck(name) {
+  if (!decks[name]) return;
+  curDeck = name;
+  deckText = decks[name];
+  store.set('mm.curDeck', curDeck);
+  order = null;
+  rebuild();
+}
+
+$('deck-select').onchange = e => switchDeck(e.target.value);
+
+$('btn-newdeck').onclick = () => {
+  $('deck-name').value = '';
+  $('deck-text').value = 'Question exemple :: Réponse exemple';
+  $('editor').classList.add('open');
+  $('deck-name').focus();
+};
+
 $('btn-edit').onclick = () => {
+  $('deck-name').value = curDeck;
   $('deck-text').value = deckText;
   $('editor').classList.add('open');
 };
+
 $('btn-cancel').onclick = () => $('editor').classList.remove('open');
+
 $('btn-save').onclick = () => {
-  deckText = $('deck-text').value;
-  store.set('mm.deck', deckText);
+  const name = $('deck-name').value.trim() || curDeck;
+  decks[name] = $('deck-text').value;
+  store.set('mm.decks', decks);
+  curDeck = name;
+  store.set('mm.curDeck', curDeck);
+  deckText = decks[name];
   order = null;
+  fillDeckSelect();
   $('editor').classList.remove('open');
   rebuild();
 };
 
+$('btn-deldeck').onclick = () => {
+  const name = $('deck-name').value.trim() || curDeck;
+  if (Object.keys(decks).length <= 1) return;   // toujours garder un paquet
+  delete decks[name];
+  store.set('mm.decks', decks);
+  if (curDeck === name) curDeck = Object.keys(decks)[0];
+  store.set('mm.curDeck', curDeck);
+  deckText = decks[curDeck];
+  fillDeckSelect();
+  $('editor').classList.remove('open');
+  rebuild();
+};
+
+/* --- Disposition & voix --- */
+$('btn-dispo').onclick = () => {
+  layoutMode = layoutMode === 'arc' ? 'frise' : 'arc';
+  store.set('mm.layout', layoutMode);
+  $('btn-dispo').textContent = layoutMode === 'frise' ? 'Disposition : frise' : 'Disposition : arc';
+  if (!focusMode) layout();
+};
+
+$('btn-voice').onclick = () => {
+  voiceOn = !voiceOn;
+  store.set('mm.voice', voiceOn);
+  $('btn-voice').textContent = voiceOn ? 'Voix : oui' : 'Voix : non';
+  if (voiceOn) speak('Voix activée');
+};
+
+/* --- Génération de cartes par IA --- */
+$('btn-gen').onclick = async () => {
+  const status = $('gen-status');
+  const src = $('gen-src').value.trim();
+  const key = $('api-key').value.trim() || store.get('mm.apikey', '');
+  if (!src) { status.textContent = 'Colle d\'abord un texte.'; return; }
+  if (!key) { status.textContent = 'Il faut ta clé API Anthropic (console.anthropic.com).'; return; }
+  store.set('mm.apikey', key);
+  status.textContent = 'Génération en cours…';
+  $('btn-gen').disabled = true;
+  try {
+    const r = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-haiku-4-5',
+        max_tokens: 2000,
+        messages: [{
+          role: 'user',
+          content: 'Transforme ce texte en cartes de révision recto/verso, en français. ' +
+            'Réponds UNIQUEMENT avec les cartes, une par ligne, au format exact « question :: réponse ». ' +
+            'Entre 8 et 20 cartes, questions précises, réponses concises.\n\nTEXTE :\n' + src
+      }]
+      })
+    });
+    const j = await r.json();
+    if (j.error) throw new Error(j.error.message || 'erreur API');
+    const txt = (j.content && j.content[0] && j.content[0].text) || '';
+    const lines = txt.split('\n').map(l => l.trim()).filter(l => l.includes('::'));
+    if (!lines.length) throw new Error('aucune carte reconnue dans la réponse');
+    $('deck-text').value = ($('deck-text').value.trim() + '\n' + lines.join('\n')).trim();
+    $('gen-src').value = '';
+    status.textContent = lines.length + ' cartes ajoutées — clique « Enregistrer » pour les voir sur le mur.';
+  } catch (e) {
+    status.textContent = 'Échec : ' + e.message;
+  } finally {
+    $('btn-gen').disabled = false;
+  }
+};
+
+/* --- Sync entre appareils --- */
+$('sync-code').value = store.get('mm.sync', '');
+
+$('btn-push').onclick = async () => {
+  let code = $('sync-code').value.trim();
+  if (!code) {
+    code = Math.random().toString(36).slice(2, 8) + Math.random().toString(36).slice(2, 8);
+    $('sync-code').value = code;
+  }
+  store.set('mm.sync', code);
+  $('btn-push').textContent = '…';
+  try { await syncPush(code); $('btn-push').textContent = 'Envoyé ✓'; }
+  catch (e) { $('btn-push').textContent = 'Échec'; }
+  setTimeout(() => { $('btn-push').textContent = 'Envoyer'; }, 2500);
+};
+
+$('btn-pull').onclick = async () => {
+  const code = $('sync-code').value.trim();
+  if (!code) { $('btn-pull').textContent = 'Code ?'; setTimeout(() => { $('btn-pull').textContent = 'Recevoir'; }, 2000); return; }
+  store.set('mm.sync', code);
+  $('btn-pull').textContent = '…';
+  try {
+    await syncPull(code);
+    fillDeckSelect();
+    rebuild();
+    $('btn-pull').textContent = 'Reçu ✓';
+  } catch (e) { $('btn-pull').textContent = 'Échec'; }
+  setTimeout(() => { $('btn-pull').textContent = 'Recevoir'; }, 2500);
+};
+
 $('btn-mode').textContent = onlyDue ? 'Mode : à revoir' : 'Mode : mur complet';
 $('btn-sens').textContent = reversed ? 'Sens : verso → recto' : 'Sens : recto → verso';
+$('btn-dispo').textContent = layoutMode === 'frise' ? 'Disposition : frise' : 'Disposition : arc';
+$('btn-voice').textContent = voiceOn ? 'Voix : oui' : 'Voix : non';
+$('api-key').value = store.get('mm.apikey', '');
 
+fillDeckSelect();
 rebuild();
 window.__mm = {
   cards: () => cards, rebuild, stateOf, activate, flip,
@@ -794,7 +1112,11 @@ window.__mm = {
   enterFocus, exitFocus, savePlaced,
   focus: () => ({ focusMode, qi, queueLen: queue.length }),
   placed: () => placed,
-  panel: { skipBtn }
+  panel: { skipBtn },
+  decks: () => ({ names: Object.keys(decks), cur: curDeck }),
+  switchDeck,
+  layoutMode: () => layoutMode,
+  syncPush, syncPull
 };
 </script>
 </body>
