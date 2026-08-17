@@ -86,6 +86,7 @@
     <button id="btn-reset">Réinitialiser</button>
     <button id="btn-focus">Révision guidée</button>
     <button id="btn-game">Jeu : les portes</button>
+    <button id="btn-quest">Quête 360°</button>
     <button id="btn-arc">Ranger en arc</button>
     <button id="btn-edit" class="primary">Éditer le paquet</button>
     <button id="btn-decor">Décor : nuit</button>
@@ -153,6 +154,15 @@
     <div class="actions">
       <button id="btn-illustrate">Illustrer les cartes sans image</button>
       <span id="img-status" style="font-size:11px;color:var(--muted);align-self:center;max-width:280px"></span>
+    </div>
+    <hr class="sep" />
+    <div class="row">
+      <strong style="font-size:13px">Quête 360° — panoramas</strong>
+      <small>5 chapitres · ~5&nbsp;¢ par panorama généré, une seule fois</small>
+    </div>
+    <div class="actions">
+      <button id="btn-panos">Générer les panoramas manquants</button>
+      <span id="pano-status" style="font-size:11px;color:var(--muted);align-self:center;max-width:280px"></span>
     </div>
     <hr class="sep" />
     <div class="row">
@@ -316,6 +326,73 @@ const LEVEL_NAMES = ['complet', 'mots masqués', 'initiales', 'de mémoire'];
 let flog  = store.get('mm.flog', {});    // 'AAAA-MM-JJ' -> { n, ok }
 let fails = store.get('mm.fails', {});   // id de carte -> nb d'échecs
 
+// Quêtes : visites guidées en panoramas 360° avec points clés
+const DEFAULT_QUEST = {
+  name: 'Sur les traces des empires',
+  chapters: [
+    {
+      titre: 'Le marché de Koumbi Saleh',
+      scene: "marché animé de l'empire du Ghana au Xe siècle, étals de sel gemme et de poudre d'or, marchands sahéliens en boubous, architecture de banco, lumière dorée du soir, Afrique de l'Ouest médiévale",
+      pano: '',
+      narration: "Nous sommes vers l'an mille, à Koumbi Saleh, capitale de l'empire du Ghana. Ici, le sel du désert s'échange contre l'or du fleuve. Cherche les points lumineux autour de toi.",
+      info: [
+        { label: "L'or et le sel", text: "La prospérité du Ghana repose sur le contrôle des routes : le sel venu du Sahara vaut littéralement son poids d'or." },
+        { label: 'Wagadou', text: "Les habitants nomment leur pays Wagadou. « Ghana » est le titre du roi — les voyageurs arabes en feront le nom de tout l'empire." }
+      ],
+      cle: { question: "Sur quel commerce repose la richesse de l'empire du Ghana ?", bonne: "L'or et le sel", leurres: ['La soie et l\'ivoire', 'Le cuivre et le blé'] }
+    },
+    {
+      titre: 'Kirina, 1235',
+      scene: 'plaine de savane ouest-africaine au crépuscule, deux armées médiévales mandingues face à face, cavaliers, lances et grands boucliers, baobabs, poussière dorée en suspension',
+      pano: '',
+      narration: "1235. Dans cette plaine, Soundiata Keïta affronte Soumaoro Kanté. De cette victoire naîtra l'empire du Mali, et la charte du Manden.",
+      info: [
+        { label: 'Soundiata', text: "L'enfant qu'on disait incapable de marcher devient le Lion du Mali. Sa victoire fonde un empire qui durera quatre siècles." },
+        { label: 'La charte du Manden', text: "Proclamée après la bataille : « toute vie est une vie » — l'une des plus anciennes déclarations de droits de l'humanité." }
+      ],
+      cle: { question: 'Qui Soundiata Keïta vainc-il à Kirina en 1235 ?', bonne: 'Soumaoro Kanté', leurres: ['Askia Mohamed', 'Samori Touré'] }
+    },
+    {
+      titre: 'La caravane de Mansa Moussa',
+      scene: "immense caravane royale traversant le Sahara, chameaux chargés d'or, cavaliers en boubous éclatants, dunes à perte de vue, soleil de midi, XIVe siècle",
+      pano: '',
+      narration: "1324. Mansa Moussa part en pèlerinage vers La Mecque avec des tonnes d'or. Son passage au Caire fera chuter le cours du métal précieux pendant des années.",
+      info: [
+        { label: 'Le plus riche', text: "Les chroniqueurs le décrivent comme l'homme le plus riche de son temps — peut-être de tous les temps." },
+        { label: 'La carte catalane', text: "Cinquante ans plus tard, les cartographes européens dessinent encore un roi tenant une pépite d'or au cœur de l'Afrique : c'est lui." }
+      ],
+      cle: { question: 'Quel effet le passage de Mansa Moussa au Caire a-t-il eu ?', bonne: "Le cours de l'or a chuté", leurres: ['Une famine a éclaté', 'Le Nil a été détourné'] }
+    },
+    {
+      titre: 'Sankoré, Tombouctou',
+      scene: "cour intérieure d'une université-mosquée en banco à Tombouctou, savants en robes penchés sur des manuscrits anciens, étagères chargées de livres, lumière chaude, XVIe siècle",
+      pano: '',
+      narration: "Au cœur de Tombouctou, la mosquée-université de Sankoré. Des dizaines de milliers de manuscrits : droit, astronomie, médecine, poésie. L'Afrique écrit, depuis des siècles.",
+      info: [
+        { label: 'Les manuscrits', text: "Des familles entières protègent ces textes de génération en génération — des dizaines de milliers existent encore aujourd'hui." },
+        { label: 'Ahmed Baba', text: "Le plus célèbre savant de Tombouctou : quarante ouvrages écrits, et une bibliothèque personnelle de mille six cents livres… qu'il disait modeste." }
+      ],
+      cle: { question: 'Que trouve-t-on à Sankoré ?', bonne: 'Des manuscrits par milliers', leurres: ['Des mines de sel', 'Un port de caravelles'] }
+    },
+    {
+      titre: 'Les résistants',
+      scene: 'côte atlantique sénégalaise au coucher du soleil, silhouettes de cavaliers près d\'un baobab centenaire, océan, ciel flamboyant, atmosphère solennelle',
+      pano: '',
+      narration: "Le dernier chapitre appartient aux résistants : Lat Dior et son cheval Malaw, Samori Touré, Cheikh Ahmadou Bamba. Des armes, de la foi, de la dignité.",
+      info: [
+        { label: 'Lat Dior', text: "Damel du Cayor, tombé en 1886 en s'opposant au chemin de fer colonial. Son nom est aujourd'hui partout au Sénégal." },
+        { label: 'Bamba', text: "Exilé, humilié, jamais soumis : sa résistance pacifique fonde le mouridisme et traverse les générations." }
+      ],
+      cle: { question: 'Comment Cheikh Ahmadou Bamba a-t-il résisté ?', bonne: 'Pacifiquement, par la foi', leurres: ['Par une flotte de guerre', 'En signant un traité'] }
+    }
+  ]
+};
+
+let quests = store.get('mm.quests', null);
+if (!quests) { quests = {}; quests[DEFAULT_QUEST.name] = DEFAULT_QUEST; store.set('mm.quests', quests); }
+if (!quests[DEFAULT_QUEST.name]) { quests[DEFAULT_QUEST.name] = DEFAULT_QUEST; store.set('mm.quests', quests); }
+let curQuest = DEFAULT_QUEST.name;
+
 let decor = store.get('mm.decor', 'nuit');   // nuit | étoiles | désert
 
 let deckText   = decks[curDeck];
@@ -341,7 +418,7 @@ const syncHeaders = {
 async function syncPush(code) {
   const body = JSON.stringify({
     code,
-    data: { decks, progress, placed, curDeck, texts, flog, fails },
+    data: { decks, progress, placed, curDeck, texts, flog, fails, quests },
     updated_at: new Date().toISOString()
   });
   const r = await fetch(SYNC_URL + '?on_conflict=code', {
@@ -362,6 +439,7 @@ async function syncPull(code) {
   if (d.progress) { progress = d.progress; store.set('mm.progress', progress); }
   if (d.placed)   { placed = d.placed;     store.set('mm.placed', placed); }
   if (d.texts)    { texts = d.texts;       store.set('mm.texts', texts); if (!texts[curText]) curText = Object.keys(texts)[0]; }
+  if (d.quests)   { quests = d.quests;     store.set('mm.quests', quests); if (!quests[curQuest]) curQuest = Object.keys(quests)[0]; }
   if (d.flog)     { flog = d.flog;         store.set('mm.flog', flog); }
   if (d.fails)    { fails = d.fails;       store.set('mm.fails', fails); }
   if (d.curDeck && decks[d.curDeck]) { curDeck = d.curDeck; store.set('mm.curDeck', curDeck); }
@@ -1193,6 +1271,283 @@ function answerPicked(orb) {
   }
 }
 
+/* ================= 6d. Quête : visite guidée en 360° ================= */
+let questMode = false, qChap = 0, qDone = false;
+const questGrp = new THREE.Group();
+questGrp.visible = false;
+scene.add(questGrp);
+let panoSphere = null, qHotspots = [], qInfoPanel = null, qAnswers = [], qTitleBar = null;
+
+function speakNow(text) {
+  if (!window.speechSynthesis || !text) return;
+  try {
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = 'fr-FR'; u.rate = 0.95;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+function sph(yawDeg, pitchDeg, r) {
+  const y = THREE.MathUtils.degToRad(yawDeg), p = THREE.MathUtils.degToRad(pitchDeg);
+  return new THREE.Vector3(Math.sin(y) * Math.cos(p) * r, 1.55 + Math.sin(p) * r, -Math.cos(y) * Math.cos(p) * r);
+}
+
+function disposeQuest() {
+  questGrp.traverse(o => {
+    if (o.isMesh) {
+      o.geometry.dispose();
+      const mats = Array.isArray(o.material) ? o.material : [o.material];
+      mats.forEach(m => { if (m.map) m.map.dispose(); m.dispose(); });
+    }
+  });
+  questGrp.clear();
+  panoSphere = null; qHotspots = []; qInfoPanel = null; qAnswers = []; qTitleBar = null;
+}
+
+function makeInfoTex(title, body, edge) {
+  const W = 900, H = 560;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = 'rgba(10,16,34,0.96)';
+  roundRect(ctx, 6, 6, W - 12, H - 12, 30); ctx.fill();
+  ctx.lineWidth = 7; ctx.strokeStyle = edge || '#f2b544';
+  roundRect(ctx, 6, 6, W - 12, H - 12, 30); ctx.stroke();
+  ctx.fillStyle = edge || '#f2b544';
+  ctx.font = '700 44px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText(title, W / 2, 90);
+  let size = 38, lines;
+  do {
+    ctx.font = '400 ' + size + 'px ui-sans-serif, system-ui, sans-serif';
+    lines = wrapLines(ctx, body, W - 110);
+    size -= 3;
+  } while (lines.length * size * 1.4 > H - 220 && size > 20);
+  ctx.fillStyle = '#e8ecf8';
+  const lh = size * 1.42;
+  const y0 = 170;
+  lines.forEach((l, i) => ctx.fillText(l, W / 2, y0 + i * lh));
+  ctx.fillStyle = '#93a0c0';
+  ctx.font = '400 26px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillText('· clique pour fermer ·', W / 2, H - 44);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function questChapter() { return quests[curQuest].chapters[qChap]; }
+
+function mkHotspot(pos, kind, payload) {
+  const grp = new THREE.Group();
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(0.16, 0.022, 12, 32),
+    new THREE.MeshBasicMaterial({ color: kind === 'cle' ? 0xf2b544 : 0x5b8def })
+  );
+  const core = new THREE.Mesh(
+    new THREE.SphereGeometry(0.06, 16, 16),
+    new THREE.MeshBasicMaterial({ color: 0xffffff })
+  );
+  grp.add(ring, core);
+  grp.position.copy(pos);
+  grp.lookAt(0, 1.55, 0);
+  ring.userData.qspot = { kind, payload };
+  core.userData.qspot = { kind, payload };
+  grp.userData.pulse = Math.random() * Math.PI * 2;
+  questGrp.add(grp);
+  qHotspots.push(grp);
+  return grp;
+}
+
+function buildChapter() {
+  disposeQuest();
+  qDone = false;
+  const ch = questChapter();
+
+  // sphère panoramique (ou fond neutre si le panorama n'est pas encore généré)
+  const geo = new THREE.SphereGeometry(13, 48, 32);
+  const mat = new THREE.MeshBasicMaterial({ side: THREE.BackSide, color: 0x1b2547 });
+  panoSphere = new THREE.Mesh(geo, mat);
+  panoSphere.rotation.y = Math.PI;
+  questGrp.add(panoSphere);
+  if (ch.pano) {
+    loadImg(ch.pano).then(im => {
+      if (im && panoSphere) {
+        const tex = new THREE.Texture(im);
+        tex.colorSpace = THREE.SRGBColorSpace;
+        tex.needsUpdate = true;
+        panoSphere.material.map = tex;
+        panoSphere.material.color.set(0xffffff);
+        panoSphere.material.needsUpdate = true;
+      }
+    });
+  }
+
+  // bandeau de titre
+  qTitleBar = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.5, 0.34),
+    new THREE.MeshBasicMaterial({ map: makeInfoTitleTex(ch.titre, qChap, quests[curQuest].chapters.length), transparent: true })
+  );
+  qTitleBar.position.set(0, 2.45, -2.8);
+  qTitleBar.lookAt(0, 1.55, 0);
+  questGrp.add(qTitleBar);
+
+  // points clés : 2 infos + 1 clé
+  const spots = [[-55, 2], [55, 2]];
+  (ch.info || []).slice(0, 2).forEach((inf, i) => mkHotspot(sph(spots[i][0], spots[i][1], 5.5), 'info', inf));
+  mkHotspot(sph(150, 0, 5.5), 'cle', ch.cle);
+
+  // commandes discrètes au sol
+  const mkCmd = (txt, color, ui, x) => {
+    const m = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.34, 0.12),
+      new THREE.MeshBasicMaterial({ map: makeButtonTex(txt, color), transparent: true, side: THREE.DoubleSide })
+    );
+    m.position.set(x, 0.5, -2.1);
+    m.lookAt(0, 1.55, 0);
+    m.userData.ui = ui;
+    questGrp.add(m);
+  };
+  mkCmd('PASSER', '#93a0c0', 'qskip', -0.22);
+  mkCmd('QUITTER', '#e5695f', 'qquit', 0.22);
+
+  speakNow(ch.narration);
+}
+
+function makeInfoTitleTex(title, idx, total) {
+  const W = 768, H = 176;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = 'rgba(10,16,34,0.85)';
+  roundRect(ctx, 4, 4, W - 8, H - 8, 26); ctx.fill();
+  ctx.lineWidth = 5; ctx.strokeStyle = '#f2b544';
+  roundRect(ctx, 4, 4, W - 8, H - 8, 26); ctx.stroke();
+  ctx.fillStyle = '#f2b544';
+  ctx.font = '600 28px ui-sans-serif, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('CHAPITRE ' + (idx + 1) + ' / ' + total, W / 2, 58);
+  ctx.fillStyle = '#eef2fb';
+  ctx.font = '700 44px ui-sans-serif, system-ui, sans-serif';
+  ctx.fillText(title, W / 2, 122);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function closeQInfo() {
+  if (qInfoPanel) { questGrp.remove(qInfoPanel); qInfoPanel.geometry.dispose(); qInfoPanel.material.map.dispose(); qInfoPanel.material.dispose(); qInfoPanel = null; }
+}
+
+function clearQAnswers() {
+  qAnswers.forEach(a => { questGrp.remove(a); a.geometry.dispose(); a.material.map.dispose(); a.material.dispose(); });
+  qAnswers = [];
+}
+
+function spotClicked(spot, worldPos) {
+  closeQInfo(); clearQAnswers();
+  if (spot.kind === 'info') {
+    qInfoPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.7, 1.06),
+      new THREE.MeshBasicMaterial({ map: makeInfoTex(spot.payload.label, spot.payload.text, '#5b8def'), transparent: true })
+    );
+    const dir = worldPos.clone().sub(new THREE.Vector3(0, 1.55, 0)).normalize();
+    qInfoPanel.position.copy(dir.multiplyScalar(2.4)).add(new THREE.Vector3(0, 1.55, 0));
+    qInfoPanel.lookAt(0, 1.55, 0);
+    qInfoPanel.userData.ui = 'qinfo';
+    questGrp.add(qInfoPanel);
+    speakNow(spot.payload.label + '. ' + spot.payload.text);
+  } else if (spot.kind === 'cle') {
+    const c = spot.payload;
+    const answers = [{ t: c.bonne, ok: true }, { t: c.leurres[0], ok: false }, { t: c.leurres[1], ok: false }];
+    for (let i = answers.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [answers[i], answers[j]] = [answers[j], answers[i]];
+    }
+    qInfoPanel = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.7, 1.06),
+      new THREE.MeshBasicMaterial({ map: makeInfoTex('La question-clé', c.question, '#f2b544'), transparent: true })
+    );
+    const dir = worldPos.clone().sub(new THREE.Vector3(0, 1.55, 0)).normalize();
+    const base = dir.clone().multiplyScalar(2.6).add(new THREE.Vector3(0, 1.85, 0));
+    qInfoPanel.position.copy(base);
+    qInfoPanel.lookAt(0, 1.55, 0);
+    questGrp.add(qInfoPanel);
+    speakNow(c.question);
+    const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
+    answers.forEach((a, i) => {
+      const m = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.78, 0.48),
+        new THREE.MeshBasicMaterial({ map: makeAnswerTex(a.t), transparent: true, side: THREE.DoubleSide })
+      );
+      m.position.copy(dir.clone().multiplyScalar(2.3)).add(new THREE.Vector3(0, 0.85, 0)).add(side.clone().multiplyScalar((i - 1) * 0.92));
+      m.lookAt(0, 1.55, 0);
+      m.userData.qanswer = { ok: a.ok };
+      questGrp.add(m);
+      qAnswers.push(m);
+    });
+  }
+}
+
+function qAnswerPicked(m) {
+  if (m.userData.qanswer.ok) {
+    beep(520, 0.12); setTimeout(() => beep(780, 0.2), 120);
+    closeQInfo(); clearQAnswers();
+    qDone = true;
+    setTimeout(() => {
+      qChap++;
+      if (qChap >= quests[curQuest].chapters.length) showQuestEnd();
+      else buildChapter();
+    }, 900);
+  } else {
+    beep(160, 0.3, 'square');
+    m.material.color.set(0xe5695f);
+    setTimeout(() => { m.visible = false; }, 350);
+  }
+}
+
+function showQuestEnd() {
+  disposeQuest();
+  const end = new THREE.Mesh(
+    new THREE.PlaneGeometry(1.8, 1.12),
+    new THREE.MeshBasicMaterial({ map: makeInfoTex('Quête terminée !', quests[curQuest].chapters.length + ' chapitres parcourus. L\'histoire est à toi, maintenant : va la raconter.', '#4cc38a'), transparent: true })
+  );
+  end.position.set(0, 1.55, -2.2);
+  end.userData.ui = 'qend';
+  questGrp.add(end);
+  beep(660, 0.15); setTimeout(() => beep(880, 0.25), 160);
+}
+
+function enterQuest() {
+  if (focusMode) exitFocus();
+  if (textMode) exitTextMode();
+  if (gameMode) exitGame();
+  questMode = true;
+  qChap = 0;
+  cards.forEach(c => setCardVisible(c, false));
+  grid.visible = false;
+  stars.visible = false;
+  panel.visible = false;
+  questGrp.visible = true;
+  buildChapter();
+  const b = document.getElementById('btn-quest');
+  if (b) b.textContent = 'Quitter la quête';
+}
+
+function exitQuest() {
+  questMode = false;
+  try { speechSynthesis.cancel(); } catch (e) {}
+  disposeQuest();
+  questGrp.visible = false;
+  panel.visible = true;
+  grid.visible = true;
+  applyDecor();
+  cards.forEach(c => setCardVisible(c, true));
+  layout();
+  const b = document.getElementById('btn-quest');
+  if (b) b.textContent = 'Quête 360°';
+}
+
 /* ===================== 7. Interaction commune ======================== */
 function flip(card) {
   card.flipped = !card.flipped;
@@ -1205,8 +1560,25 @@ function flip(card) {
 function activate(obj) {
   if (!obj) return;
   if (obj.userData.answer) { answerPicked(obj); return; }
+  if (obj.userData.qanswer) { qAnswerPicked(obj); return; }
+  if (obj.userData.qspot) {
+    const wp = new THREE.Vector3();
+    obj.getWorldPosition(wp);
+    spotClicked(obj.userData.qspot, wp);
+    return;
+  }
   if (obj.userData.ui) {
     const ui = obj.userData.ui;
+    if (ui === 'qinfo') { closeQInfo(); return; }
+    if (ui === 'qend') { exitQuest(); return; }
+    if (ui === 'questgo') { questMode ? exitQuest() : enterQuest(); return; }
+    if (ui === 'qquit') { exitQuest(); return; }
+    if (ui === 'qskip') {
+      qChap++;
+      if (qChap >= quests[curQuest].chapters.length) showQuestEnd();
+      else buildChapter();
+      return;
+    }
     if (ui === 'gend') { exitGame(); return; }
     if (ui === 'game') { gameMode ? exitGame() : enterGame(); return; }
     if (gameMode) return;   // les autres commandes attendent la fin du jeu
@@ -1253,10 +1625,11 @@ function panelBtn(txt, color, action, x) {
   panel.add(m);
   return m;
 }
-panelBtn('RÉVISION', '#5b8def', 'focus', -0.47);
-panelBtn('JEU', '#f2b544', 'game', -0.16);
-panelBtn('RANGER', '#93a0c0', 'arc', 0.15);
-const skipBtn = panelBtn('PASSER', '#f2b544', 'skip', 0.46);
+panelBtn('RÉVISION', '#5b8def', 'focus', -0.62);
+panelBtn('JEU', '#f2b544', 'game', -0.31);
+panelBtn('QUÊTE', '#4cc38a', 'questgo', 0);
+panelBtn('RANGER', '#93a0c0', 'arc', 0.31);
+const skipBtn = panelBtn('PASSER', '#f2b544', 'skip', 0.62);
 skipBtn.visible = false;
 // rangée « texte long », visible uniquement en mode texte
 const txtBtns = [
@@ -1416,6 +1789,11 @@ function speakCurrentPage() {
 function pickables() {
   let list = picking.concat(uiButtons);
   if (gameMode) list = list.concat(gameGrp.children.filter(m => m.isMesh && (m.userData.answer || m.userData.ui)));
+  if (questMode) {
+    const qs = [];
+    questGrp.traverse(o => { if (o.isMesh && (o.userData.qspot || o.userData.qanswer || o.userData.ui)) qs.push(o); });
+    list = list.concat(qs);
+  }
   return list.filter(m => m.visible !== false);
 }
 
@@ -1539,6 +1917,15 @@ renderer.setAnimationLoop(() => {
   // ouverture de la porte du jeu
   if (gameMode && doorOpening && doorPivot && doorPivot.rotation.y > -1.45) {
     doorPivot.rotation.y += (-1.5 - doorPivot.rotation.y) * 0.1;
+  }
+
+  // pulsation des points clés de la quête
+  if (questMode) {
+    const t = performance.now() / 1000;
+    qHotspots.forEach(h => {
+      const s = 1 + 0.14 * Math.sin(t * 2.4 + h.userData.pulse);
+      h.scale.setScalar(s);
+    });
   }
 
   if (!renderer.xr.isPresenting) {
@@ -1964,6 +2351,59 @@ $('btn-illustrate').onclick = async () => {
 /* --- Jeu des portes --- */
 $('btn-game').onclick = () => { gameMode ? exitGame() : enterGame(); };
 
+/* --- Quête 360° --- */
+$('btn-quest').onclick = () => { questMode ? exitQuest() : enterQuest(); };
+
+$('btn-panos').onclick = async () => {
+  const status = $('pano-status');
+  const key = $('img-key').value.trim() || store.get('mm.imgkey', '');
+  if (!key) { status.textContent = 'Il faut ta clé API OpenAI (champ « Illustrer » ci-dessus).'; return; }
+  store.set('mm.imgkey', key);
+  const q = quests[curQuest];
+  const todo = q.chapters.filter(ch => !ch.pano);
+  if (!todo.length) { status.textContent = 'Tous les panoramas sont déjà générés.'; return; }
+  $('btn-panos').disabled = true;
+  let done = 0;
+  for (const ch of todo) {
+    status.textContent = 'Panorama « ' + ch.titre + ' »… (' + (done + 1) + '/' + todo.length + ')';
+    try {
+      const r = await fetch('https://api.openai.com/v1/images/generations', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', Authorization: 'Bearer ' + key },
+        body: JSON.stringify({
+          model: 'gpt-image-1',
+          prompt: 'Panorama équirectangulaire 360 degrés sans couture, projection sphérique complète : ' + ch.scene +
+            '. Vue immersive à hauteur d\'homme, aucun texte, aucune lettre, style peinture numérique cinématographique très détaillée.',
+          size: '1536x1024',
+          quality: 'medium',
+          n: 1
+        })
+      });
+      const j = await r.json();
+      if (j.error) throw new Error(j.error.message || 'erreur API');
+      const b64 = j.data && j.data[0] && j.data[0].b64_json;
+      if (!b64) throw new Error('réponse sans image');
+      const im = new Image();
+      await new Promise((res, rej) => { im.onload = res; im.onerror = rej; im.src = 'data:image/png;base64,' + b64; });
+      // étire vers le ratio 2:1 attendu par la sphère
+      const cv = document.createElement('canvas');
+      cv.width = 2048; cv.height = 1024;
+      cv.getContext('2d').drawImage(im, 0, 0, 2048, 1024);
+      const blob = await new Promise(res => cv.toBlob(res, 'image/jpeg', 0.85));
+      const name = 'pano-' + Date.now() + '.jpg';
+      ch.pano = await uploadCardImage(blob, name);
+      quests[curQuest] = q;
+      store.set('mm.quests', quests);
+      done++;
+    } catch (e) {
+      status.textContent = 'Échec « ' + ch.titre + ' » : ' + e.message;
+      if (/incorrect api key|invalid/i.test(e.message)) break;
+    }
+  }
+  status.textContent = done + '/' + todo.length + ' panoramas générés — lance la Quête 360° !';
+  $('btn-panos').disabled = false;
+};
+
 /* --- Duo --- */
 $('btn-duo').onclick = toggleDuo;
 
@@ -2004,7 +2444,13 @@ window.__mm = {
   enterGame, exitGame, answerPicked,
   gameState: () => ({ gameMode, gIdx, gErrors, doors: gQueue.length, doorOpening }),
   gameOrbs: () => gOrbs,
-  gameEnd: () => gEndPanel
+  gameEnd: () => gEndPanel,
+  enterQuest, exitQuest, spotClicked, qAnswerPicked,
+  questState: () => ({ questMode, qChap, total: quests[curQuest].chapters.length, hotspots: qHotspots.length }),
+  questSpots: () => qHotspots,
+  questAnswers: () => qAnswers,
+  questInfo: () => qInfoPanel,
+  questGrpRef: () => questGrp
 };
 </script>
 </body>
