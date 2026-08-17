@@ -163,6 +163,7 @@
     </div>
     <div class="actions">
       <button id="btn-panos">Générer les panoramas manquants</button>
+      <button id="btn-voices">Générer les voix</button>
       <span id="pano-status" style="font-size:11px;color:var(--muted);align-self:center;max-width:280px"></span>
     </div>
     <hr class="sep" />
@@ -1279,10 +1280,24 @@ questGrp.visible = false;
 scene.add(questGrp);
 let panoSphere = null, qHotspots = [], qInfoPanel = null, qAnswers = [], qTitleBar = null;
 
-function speakNow(text) {
+/* Voix : fichier audio pré-généré si disponible (fonctionne au casque),
+   sinon synthèse du navigateur (fonctionne sur PC). */
+let qAudio = null;
+function stopAudio() {
+  try { if (qAudio) { qAudio.pause(); qAudio = null; } } catch (e) {}
+  try { speechSynthesis.cancel(); } catch (e) {}
+}
+function speakNow(text, audioUrl) {
+  stopAudio();
+  if (audioUrl) {
+    try {
+      qAudio = new Audio(audioUrl);
+      qAudio.play().catch(() => {});
+      return;
+    } catch (e) {}
+  }
   if (!window.speechSynthesis || !text) return;
   try {
-    speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     u.lang = 'fr-FR'; u.rate = 0.95;
     speechSynthesis.speak(u);
@@ -1433,10 +1448,11 @@ function buildChapter() {
     m.userData.ui = ui;
     questGrp.add(m);
   };
-  mkCmd('PASSER', '#93a0c0', 'qskip', -0.22);
-  mkCmd('QUITTER', '#e5695f', 'qquit', 0.22);
+  mkCmd('ÉCOUTER', '#4cc38a', 'qsay', -0.44);
+  mkCmd('PASSER', '#93a0c0', 'qskip', 0);
+  mkCmd('QUITTER', '#e5695f', 'qquit', 0.44);
 
-  speakNow(ch.narration);
+  speakNow(ch.narration, ch.audio);
 }
 
 function makeInfoTitleTex(title, idx, total) {
@@ -1481,7 +1497,7 @@ function spotClicked(spot, worldPos) {
     qInfoPanel.lookAt(0, 1.55, 0);
     qInfoPanel.userData.ui = 'qinfo';
     questGrp.add(qInfoPanel);
-    speakNow(spot.payload.label + '. ' + spot.payload.text);
+    speakNow(spot.payload.label + '. ' + spot.payload.text, spot.payload.audio);
   } else if (spot.kind === 'cle') {
     const c = spot.payload;
     const answers = [{ t: c.bonne, ok: true }, { t: c.leurres[0], ok: false }, { t: c.leurres[1], ok: false }];
@@ -1498,7 +1514,7 @@ function spotClicked(spot, worldPos) {
     qInfoPanel.position.copy(base);
     qInfoPanel.lookAt(0, 1.55, 0);
     questGrp.add(qInfoPanel);
-    speakNow(c.question);
+    speakNow(c.question, c.audio);
     const side = new THREE.Vector3().crossVectors(new THREE.Vector3(0, 1, 0), dir).normalize();
     answers.forEach((a, i) => {
       const m = new THREE.Mesh(
@@ -1561,7 +1577,7 @@ function enterQuest() {
 
 function exitQuest() {
   questMode = false;
-  try { speechSynthesis.cancel(); } catch (e) {}
+  stopAudio();
   disposeQuest();
   questGrp.visible = false;
   panel.visible = true;
@@ -1598,6 +1614,7 @@ function activate(obj) {
     if (ui === 'qend') { exitQuest(); return; }
     if (ui === 'questgo') { questMode ? exitQuest() : enterQuest(); return; }
     if (ui === 'qquit') { exitQuest(); return; }
+    if (ui === 'qsay' && questMode) { const ch = questChapter(); if (ch) speakNow(ch.narration, ch.audio); return; }
     if (ui === 'qskip') {
       qChap++;
       if (qChap >= quests[curQuest].chapters.length) showQuestEnd();
@@ -2290,14 +2307,31 @@ $('csv-file').onchange = async e => {
 /* --- Illustration des cartes par IA --- */
 const SUPA_URL = 'https://xfcpseixozmikaxfkxxv.supabase.co';
 
-async function uploadCardImage(blob, name) {
+async function uploadAsset(blob, name, contentType) {
   const r = await fetch(SUPA_URL + '/storage/v1/object/mm-img/' + name, {
     method: 'POST',
-    headers: { Authorization: 'Bearer ' + SYNC_KEY, apikey: SYNC_KEY, 'Content-Type': 'image/jpeg' },
+    headers: { Authorization: 'Bearer ' + SYNC_KEY, apikey: SYNC_KEY, 'Content-Type': contentType || 'image/jpeg' },
     body: blob
   });
   if (!r.ok) throw new Error('hébergement : HTTP ' + r.status);
   return SUPA_URL + '/storage/v1/object/public/mm-img/' + name;
+}
+const uploadCardImage = (blob, name) => uploadAsset(blob, name, 'image/jpeg');
+
+/* Génère une voix via le relais et l'héberge ; retourne l'URL du MP3 */
+async function makeVoice(text, name) {
+  const pass = document.getElementById('proxy-pass').value.trim() || store.get('mm.proxypass', '');
+  const r = await fetch(SUPA_URL + '/functions/v1/mm-images', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-mm-pass': pass },
+    body: JSON.stringify({ tts: { text, voice: 'onyx' } })
+  });
+  const j = await r.json();
+  if (j.error) throw new Error(j.error);
+  const bin = atob(j.audio);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return uploadAsset(new Blob([bytes], { type: 'audio/mpeg' }), name, 'audio/mpeg');
 }
 
 function shrinkToJpeg(im) {
@@ -2428,6 +2462,38 @@ $('btn-panos').onclick = async () => {
   }
   status.textContent = done + '/' + todo.length + ' panoramas générés — lance la Quête 360° !';
   $('btn-panos').disabled = false;
+};
+
+/* --- Voix de la quête (fichiers audio pour le casque) --- */
+$('btn-voices').onclick = async () => {
+  const status = $('pano-status');
+  const q = quests[curQuest];
+  const jobs = [];
+  q.chapters.forEach((ch, ci) => {
+    if (!ch.audio) jobs.push({ set: u => { ch.audio = u; }, text: ch.narration, name: 'voice-' + Date.now() + '-c' + ci + '.mp3' });
+    (ch.info || []).forEach((inf, ii) => {
+      if (!inf.audio) jobs.push({ set: u => { inf.audio = u; }, text: inf.label + '. ' + inf.text, name: 'voice-' + Date.now() + '-c' + ci + 'i' + ii + '.mp3' });
+    });
+    if (ch.cle && !ch.cle.audio) jobs.push({ set: u => { ch.cle.audio = u; }, text: ch.cle.question, name: 'voice-' + Date.now() + '-c' + ci + 'q.mp3' });
+  });
+  if (!jobs.length) { status.textContent = 'Toutes les voix sont déjà générées.'; return; }
+  $('btn-voices').disabled = true;
+  let done = 0, failed = 0;
+  for (const job of jobs) {
+    status.textContent = 'Voix ' + (done + failed + 1) + '/' + jobs.length + '…';
+    try {
+      job.set(await makeVoice(job.text, job.name));
+      quests[curQuest] = q;
+      store.set('mm.quests', quests);
+      done++;
+    } catch (e) {
+      failed++;
+      status.textContent = 'Échec voix : ' + e.message;
+      if (/invalide|incorrect/i.test(e.message)) break;
+    }
+  }
+  status.textContent = done + '/' + jobs.length + ' voix générées' + (failed ? ' (' + failed + ' échecs)' : '') + ' — la quête parle maintenant au casque.';
+  $('btn-voices').disabled = false;
 };
 
 /* --- Duo --- */
